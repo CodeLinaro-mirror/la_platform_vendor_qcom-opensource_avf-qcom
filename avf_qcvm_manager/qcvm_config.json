@@ -1,0 +1,37 @@
+{
+    "qcvm_config" : {
+
+        "major_number": 1,
+        "minor_number": 0,
+        "vm_configs" : [
+            {
+                "name" : "trustedvm",
+                "disk" : [
+                    { "image" : "/vendor/vm-system/trustedvm/system.img", "label" : 10, "read_write" : false }
+               ],
+                "kernel" : "/vendor/vm-system/trustedvm/boot/trustedvm.elf",
+                "swiotlb_size": 16,
+                "total_memory": 84,
+                "enabled": true,
+                "early_vm" : true,
+                "force_stop" : false,
+                "num_vcpus": 2,
+                "mink_uid": 808
+            },
+            {
+                "name" : "oemvm",
+                "disk" : [
+                    { "image" : "/vendor/vm-system/oemvm/system.img", "label" : 13, "read_write" : false }
+               ],
+                "kernel" : "/vendor/vm-system/trustedvm/boot/oemvm.elf",
+                "swiotlb_size": 16,
+                "total_memory": 84,
+                "enabled": true,
+                "early_vm" : false,
+                "force_stop" : false,
+                "num_vcpus": 2,
+                "mink_uid": 808
+            }
+        ]
+    }
+}
