@@ -375,7 +375,7 @@ impl VmInstance {
             "trustedvm" =>  {
                 info!("trustedvm CMA");
                 Some(File::open(CMA_TUI_VM).expect("Failed to open dev node file"))
-            }
+            },
             _ => {
                 info!("oemvm CMA");
                 Some(File::open(CMA_OEM_VM).expect("Failed to open dev node file"))
@@ -419,24 +419,26 @@ impl VmInstance {
     /// Meant to be implemented once ABL sets up the ro board properties
     fn get_vm_dtbo_index(&self) -> Result<i32>{
         let name = self.vm_config.name.clone();
-        if name == String::from("trustedvm"){
-             let tuivm_sys_prop =  system_properties::read("ro.boot.hypervisor.tuivm_dtbo_idx")
-             .context("Failed to read vm_dtbo_idx")?
-             .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
+              match name.as_str(){
+              "trustedvm" => {
+                               let tuivm_sys_prop =  system_properties::read("ro.boot.hypervisor.tuivm_dtbo_idx")
+                               .context("Failed to read vm_dtbo_idx")?
+                               .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
 
-             let tuivm_idx: i32 = tuivm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
-             info!("Tuivm Index: {tuivm_idx}");
-             return Ok(tuivm_idx);
-        }
-        else{
-             let oemvm_sys_prop =  system_properties::read("ro.boot.hypervisor.oemvm_dtbo_idx")
-             .context("Failed to read vm_dtbo_idx")?
-             .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
+                               let tuivm_idx: i32 = tuivm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
+                               info!("Tuivm Index: {tuivm_idx}");
+                               return Ok(tuivm_idx);
+                            },
+                      _ =>  {
+                               let oemvm_sys_prop =  system_properties::read("ro.boot.hypervisor.oemvm_dtbo_idx")
+                               .context("Failed to read vm_dtbo_idx")?
+                               .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
 
-             let oemvm_idx: i32 = oemvm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
-             info!("oemvm Index: {oemvm_idx}");
-             return Ok(oemvm_idx);
-        }
+                               let oemvm_idx: i32 = oemvm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
+                               info!("oemvm Index: {oemvm_idx}");
+                               return Ok(oemvm_idx);
+                            }
+              };
     }
 
 
