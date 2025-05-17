@@ -98,7 +98,7 @@ fn main() {
         ))
         .expect("Failed to get service.");
 
-    let vm = virt_service.getVm("trustedvm").expect("Failed to get VM");
+    let vm = virt_service.getVm("oemvm").expect("Failed to get VM");
     let callback = VirtualMachineCallback{name: String::from("trustedvm")};
     vm.start(&callback.to_binder()).expect("Failed to start");
 

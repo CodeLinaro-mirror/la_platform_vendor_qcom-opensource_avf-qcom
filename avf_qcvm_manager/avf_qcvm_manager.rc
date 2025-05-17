@@ -1,6 +1,9 @@
 # Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause-Clear
 
+on post-fs-data
+    mkdir /data/vendor/qtvm_dtbo 0777 root root
+
 service vendor.qti.AvfQcvmManager /vendor/bin/avf_qcvm_manager_rs
   user root
   group root
