@@ -390,10 +390,6 @@ impl VmInstance {
         let size: u64 = fstat(cma_fd).unwrap().st_size as u64;
         let end_addr: u64 = start_addr + size;
 
-        let start_addr: u64 = 0x80000000;
-        let size: u64 = fstat(cma_fd).unwrap().st_size as u64;
-        let end_addr: u64 = start_addr + size;
-
         info!("CMA size = {:?}, Fd = {:?}", size, cma_fd);
 
         unsafe{AVirtualMachineRawConfig_addCustomMemoryBackingFile(config, cma_fd,
