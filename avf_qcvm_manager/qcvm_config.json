@@ -10,10 +10,10 @@
                     { "image" : "/vendor/vm-system/trustedvm/system.img", "label" : 10, "read_write" : false }
                ],
                 "kernel" : "/vendor/vm-system/trustedvm/boot/trustedvm.elf",
-                "swiotlb_size": 16,
-                "total_memory": 84,
+                "swiotlb_size": 3,
+                "cma_size": 71,
                 "enabled": true,
-                "early_vm" : true,
+                "early_vm" : false,
                 "force_stop" : false,
                 "num_vcpus": 2,
                 "mink_uid": 808
@@ -23,9 +23,9 @@
                 "disk" : [
                     { "image" : "/vendor/vm-system/oemvm/system.img", "label" : 13, "read_write" : false }
                ],
-                "kernel" : "/vendor/vm-system/trustedvm/boot/oemvm.elf",
-                "swiotlb_size": 16,
-                "total_memory": 84,
+                "kernel" : "/vendor/vm-system/oemvm/boot/oemvm.elf",
+                "swiotlb_size": 3,
+                "cma_size": 76,
                 "enabled": true,
                 "early_vm" : false,
                 "force_stop" : false,

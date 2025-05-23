@@ -28,7 +28,7 @@ use std::ffi::CString;
 
 
 
-// use rustutils::system_properties;
+use rustutils::system_properties;
 use zerocopy::{
     byteorder::{BigEndian, U32},
     FromBytes,
@@ -36,6 +36,7 @@ use zerocopy::{
 
 
 use nix::unistd::{chown, Uid, close};
+use nix::sys::stat::fstat;
 use std::os::raw::c_ulong;
 
 use std::default;
@@ -82,7 +83,7 @@ const STOP_TIMEOUT: timespec = timespec { tv_sec: 100, tv_nsec: 0 };
 const GH_ANDROID_IOCTL_TYPE: u8 = 65u8;
 const CMA_TUI_VM: &str = "/dev/trustedvm_cma";
 const CMA_OEM_VM: &str = "/dev/oemvm_cma";
-ioctl_io_nr!(GH_ANDROID_CREATE_CMA_MEM_FD, GH_ANDROID_IOCTL_TYPE, 0x13);
+ioctl_io_nr!(GH_ANDROID_CREATE_CMA_MEM_FD, GH_ANDROID_IOCTL_TYPE, 0x14);
 
 static DEFAULT_BOOT_COMPLETE_TIMEOUT: u16 = 60;
 static DEFAULT_SHUTDOWN_TIMEOUT: u32 = 60;
@@ -369,40 +370,47 @@ impl VmInstance {
 
         //Creating CMA FD
         let mut dev_node: Option<File> = None;
-        if self.vm_config.name == "trustedvm" {
-            println!("trustedvm CMA");
-            dev_node = Some(File::open(CMA_TUI_VM).expect("Failed to open dev node file"));
+        info!("CMA FD VM name = {:?}", &self.vm_config.name);
+        dev_node = match self.vm_config.name.as_str() {
+            "trustedvm" =>  {
+                info!("trustedvm CMA");
+                Some(File::open(CMA_TUI_VM).expect("Failed to open dev node file"))
+            },
+            _ => {
+                info!("oemvm CMA");
+                Some(File::open(CMA_OEM_VM).expect("Failed to open dev node file"))
+            }
+        };
 
-        }
-        else{
-            println!("oemvm CMA");
-            dev_node = Some(File::open(CMA_OEM_VM).expect("Failed to open dev node file"));
-
-        }
         let mut dev_node_file = dev_node.unwrap();
-        let size = dev_node_file.seek(SeekFrom::End(0))?;
         let dev_node_fd = dev_node_file.into_raw_fd();
         let ref_dev_node = unsafe{&SafeDescriptor::from_raw_descriptor(dev_node_fd)};
         let cma_fd = unsafe { ioctl_with_val(ref_dev_node, GH_ANDROID_CREATE_CMA_MEM_FD, 0 as c_ulong) };
+        let start_addr: u64 = 0x80000000;
+        let size: u64 = fstat(cma_fd).unwrap().st_size as u64;
+        let end_addr: u64 = start_addr + size;
+
+        let start_addr: u64 = 0x80000000;
+        let size: u64 = fstat(cma_fd).unwrap().st_size as u64;
+        let end_addr: u64 = start_addr + size;
 
         info!("CMA size = {:?}, Fd = {:?}", size, cma_fd);
 
         unsafe{AVirtualMachineRawConfig_addCustomMemoryBackingFile(config, cma_fd,
-            0x80000000 as u64,  0x84400000 as u64);}
-
+            start_addr,  end_addr);}
 
         //Create a tmp VM Dtbo and set it
-        self.get_vm_dtbo(String::from("/dev/block/by-name/qtvm_dtbo_a"))?;
+        let slot_suffix = system_properties::read("ro.boot.slot_suffix")
+         .context("Failed to read ro.boot.slot_suffix")?
+         .ok_or_else(|| anyhow!("slot_suffix is none"))?;
+        self.get_vm_dtbo(format!("/dev/block/by-name/qtvm_dtbo{}",slot_suffix))?;
 
 
         unsafe{
             AVirtualMachineRawConfig_setDeviceTreeOverlay(config, self.vm_dtbo_fd.clone().unwrap());
         }
 
-
-
         self.avf_handle.avf_config = Some(config);
-
         Ok(())
 
     }
@@ -410,19 +418,27 @@ impl VmInstance {
 
     /// Meant to be implemented once ABL sets up the ro board properties
     fn get_vm_dtbo_index(&self) -> Result<i32>{
-        // let name = self.vm_name.clone();
-        // if name == String::from("trustedvm"){
-        //     let tuivm_sys_prop =  system_properties::read("product.sysprop.tuivm.vm_dtbo_idx")
-        //     .context("Failed to read vm_dtbo_idx")?
-        //     .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
+        let name = self.vm_config.name.clone();
+              match name.as_str(){
+              "trustedvm" => {
+                               let tuivm_sys_prop =  system_properties::read("ro.boot.hypervisor.tuivm_dtbo_idx")
+                               .context("Failed to read vm_dtbo_idx")?
+                               .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
 
-        //     let tuivm_idx: i32 = tuivm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
-        //     info!("Tuivm Index: {tuivm_idx}");
-        //     return Ok(tuivm_idx);
-        // }
+                               let tuivm_idx: i32 = tuivm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
+                               info!("Tuivm Index: {tuivm_idx}");
+                               return Ok(tuivm_idx);
+                            },
+                      _ =>  {
+                               let oemvm_sys_prop =  system_properties::read("ro.boot.hypervisor.oemvm_dtbo_idx")
+                               .context("Failed to read vm_dtbo_idx")?
+                               .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
 
-        Ok(0)
-
+                               let oemvm_idx: i32 = oemvm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
+                               info!("oemvm Index: {oemvm_idx}");
+                               return Ok(oemvm_idx);
+                            }
+              };
     }
 
 
@@ -432,6 +448,7 @@ impl VmInstance {
     fn get_vm_dtbo(&mut self, path: String) -> Result<()>{
         let vm_name = self.vm_config.name.clone();
         let temp_path = get_or_create_common_dir()?.join(format!("{vm_name}.dtbo"));
+        info!("DTBO Path: {:?}",path);
         info!("temp_path: {:?}", temp_path);
 
         let idx = self.get_vm_dtbo_index()?;
