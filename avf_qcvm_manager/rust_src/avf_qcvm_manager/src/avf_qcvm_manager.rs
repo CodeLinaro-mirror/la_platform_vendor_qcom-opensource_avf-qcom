@@ -15,13 +15,12 @@ use std::{collections::HashMap, sync::{Arc, Mutex, Weak}, fmt::Debug};
 use log::{warn, info, error};
 use serde_json::Value;
 use std::fs::{File, set_permissions, create_dir, remove_dir_all, remove_file, Permissions};
+use anyhow::{Result, ensure};
 use vendor_qti_AvfQcvmManager::aidl::vendor::qti::AvfQcvmManager::{
     IAvfQcvmManager::{
         BnAvfQcvmManager, IAvfQcvmManager, BpAvfQcvmManager
     }, VmInfo::VmInfo, IVirtualMachine::IVirtualMachine,
 };
-use rustutils::system_properties;
-use anyhow::{anyhow, bail, ensure, Context, Result};
 
 use avf_llndk_bindgen::{AVirtualizationService, AVirtualizationService_create};
 
@@ -155,38 +154,29 @@ pub fn parse_vm_config_json() -> Result<Vec<VmConfig>>{
         .and_then(|arr| arr.as_array())
         .ok_or("VM Configuration is invalid."))?;
     for config in json_config_array {
-        let slot_suffix = system_properties::read("ro.boot.slot_suffix")
-         .context("Failed to read ro.boot.slot_suffix")?
-         .ok_or_else(|| anyhow!("slot_suffix is none"))?;
         match serde_json::from_value::<VmConfig>(config.to_owned()) {
             Ok(mut vm_config) => {
                 if vm_config.name == "trustedvm"{
                     vm_config.vm_id = 45;
                     vm_config.pas_id = 28;
-                    if vm_config.cma_size == 0 {
-                        vm_config.cma_size = 68;
-                    }
+                    vm_config.cma_size = 68;
                     if vm_config.swiotlb_size == 0 {
                         vm_config.swiotlb_size = 16;
                     }
-                    vm_config.total_memory= vm_config.cma_size + vm_config.swiotlb_size;
                     if vm_config.vm_dtbo_path == String::from("") {
-                        vm_config.vm_dtbo_path = format!("/dev/block/by-name/qtvm_dtbo{}",slot_suffix)
+                        vm_config.vm_dtbo_path = String::from("/dev/block/by-name/qtvm_dtbo_a")
                     }
                 }
                 //Assume it is a type of oemvm
                 else {
                     vm_config.vm_id = 49;
                     vm_config.pas_id = 34;
-                    if vm_config.cma_size == 0 {
-                        vm_config.cma_size = 76;
-                    }
+                    vm_config.cma_size = 68;
                     if vm_config.swiotlb_size == 0 {
                         vm_config.swiotlb_size = 16;
                     }
-                    vm_config.total_memory= vm_config.cma_size + vm_config.swiotlb_size;
                     if vm_config.vm_dtbo_path == String::from("") {
-                        vm_config.vm_dtbo_path = format!("/dev/block/by-name/qtvm_dtbo{}",slot_suffix)
+                        vm_config.vm_dtbo_path = String::from("/dev/block/by-name/qtvm_dtbo_a")
                     }
                 }
                 info!("VM Config: {:?}", vm_config);
