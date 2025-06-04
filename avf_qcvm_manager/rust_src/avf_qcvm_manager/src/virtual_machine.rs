@@ -36,7 +36,6 @@ use zerocopy::{
 
 
 use nix::unistd::{chown, Uid, close};
-use nix::sys::stat::fstat;
 use std::os::raw::c_ulong;
 
 use std::default;
@@ -381,17 +380,15 @@ impl VmInstance {
 
         }
         let mut dev_node_file = dev_node.unwrap();
+        let size = dev_node_file.seek(SeekFrom::End(0))?;
         let dev_node_fd = dev_node_file.into_raw_fd();
         let ref_dev_node = unsafe{&SafeDescriptor::from_raw_descriptor(dev_node_fd)};
         let cma_fd = unsafe { ioctl_with_val(ref_dev_node, GH_ANDROID_CREATE_CMA_MEM_FD, 0 as c_ulong) };
-        let start_addr: u64 = 0x80000000;
-        let size: u64 = fstat(cma_fd).unwrap().st_size as u64;
-        let end_addr: u64 = start_addr + size;
 
         info!("CMA size = {:?}, Fd = {:?}", size, cma_fd);
 
         unsafe{AVirtualMachineRawConfig_addCustomMemoryBackingFile(config, cma_fd,
-            start_addr,  end_addr);}
+            0x80000000 as u64,  0x84400000 as u64);}
 
 
         //Create a tmp VM Dtbo and set it
