@@ -1,0 +1,72 @@
+prebuilt_etc{
+    name: "early_vms_trusted_vm",
+    srcs: ["early_vm_manifests/early_vms_trusted_vm.xml"],
+    proprietary: true,
+    sub_dir: "avf",
+}
+
+prebuilt_etc{
+    name: "early_vms_oem_vm",
+    srcs: ["early_vm_manifests/early_vms_oem_vm.xml"],
+    proprietary: true,
+    sub_dir: "avf",
+}
+
+rust_binary{
+    name: "avf_qcvm_manager_rs",
+    srcs: ["rust_src/avf_qcvm_manager/src/main.rs"],
+    crate_name: "avf_test_client",
+    edition: "2021",
+    rustlibs: [
+        "vendor.qti.AvfQcvmManager-V1-rust",
+        "libvmclient",
+        "libavf_llndk_bindgen",
+        "libhypervisor",
+        "libbinder_rs",
+        "liblibc",
+        "liblog_rust",
+        "libserde_json",
+        "libserde",
+        "libvsock",
+        "libanyhow",
+        "liblogger",
+        "libbase_rust",
+        "librustutils",
+        "libzerocopy",
+        "libnix",
+    ],
+    cfgs: select(release_flag("RELEASE_AVF_ENABLE_EARLY_VM"), {
+        true: ["early_vm_enabled"],
+        default: [],
+    }),
+    shared_libs: ["libavf"],
+
+    vendor: true,
+    init_rc: ["avf_qcvm_manager.rc"],
+    prefer_rlib: true,
+    vintf_fragments: ["avf_qcvm_manager.xml"],
+}
+
+// Access to the C API for Rust code.
+rust_bindgen {
+    name: "libavf_llndk_bindgen",
+    wrapper_src: "rust_src/include/virtualization.h",
+    crate_name: "avf_llndk_bindgen",
+    defaults: ["avf_build_flags_rust"],
+    source_stem: "bindings",
+    bindgen_flags: [
+        "--default-enum-style rust",
+    ],
+    shared_libs: [
+        "libavf",
+    ],
+    vendor_available: true,
+}
+
+prebuilt_etc {
+    name: "qcvm_config.json",
+    owner: "qti",
+    src: "qcvm_config.json",
+    vendor: true,
+}
+
