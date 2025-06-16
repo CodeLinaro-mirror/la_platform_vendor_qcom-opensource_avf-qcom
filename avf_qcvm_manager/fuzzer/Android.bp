@@ -8,8 +8,6 @@
 //        "libavf_qcvm_manager",
 //        "libbinder_random_parcel_rs"
 //    ],
-
 //    vendor: true,
 //    prefer_rlib: true,
-
 //}

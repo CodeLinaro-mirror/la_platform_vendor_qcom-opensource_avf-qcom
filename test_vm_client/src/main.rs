@@ -1,4 +1,4 @@
-/* 
+/*
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
@@ -86,7 +86,7 @@ fn main() {
 
     let _init_success = logger::init(
         logger::Config::default()
-            .with_tag_on_device("qvirtservice_client")
+            .with_tag_on_device("oemvm test client")
             .with_max_level(LevelFilter::Debug),
     );
 
@@ -99,14 +99,15 @@ fn main() {
         .expect("Failed to get service.");
 
     let vm = virt_service.getVm("oemvm").expect("Failed to get VM");
-    let callback = VirtualMachineCallback{name: String::from("trustedvm")};
-    vm.start(&callback.to_binder()).expect("Failed to start");
+    let callback = VirtualMachineCallback{name: String::from("oemvm")};
+    let cb_binder = callback.to_binder();
+    vm.start(&cb_binder).expect("Failed to start");
 
     let five_seconds = Duration::from_secs(20);
     println!("Sleeping for 5 seconds...");
     thread::sleep(five_seconds);
     println!("Awake now!");
-    // vm.stop().expect("Failed to stop");
+    vm.request_stop(&cb_binder).expect("Failed to stop");
 
     loop{}
 
