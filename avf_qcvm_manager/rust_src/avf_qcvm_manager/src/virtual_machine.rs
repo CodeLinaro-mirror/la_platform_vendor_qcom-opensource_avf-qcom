@@ -53,7 +53,7 @@ use std::path::{PathBuf, Path};
 use std::time::{Duration, Instant};
 use vsock::{VsockListener, VsockStream, VMADDR_CID_HOST};
 
-use avf_bindgen::{AVirtualMachine_createRaw,
+use avf_llndk_bindgen::{AVirtualMachine_createRaw,
     AVirtualMachineRawConfig_setHypervisorSpecificAuthMethod, AVirtualMachineRawConfig_setInstanceId,
     AVirtualMachineRawConfig_setVCpuCount, AVirtualMachineRawConfig_setSwiotlbMiB,
     AVirtualMachineRawConfig_addDisk, AVirtualMachineRawConfig_setMemoryMiB,
@@ -154,11 +154,11 @@ pub struct VmConfig {
     #[serde(default)]
     pub early_vm: bool,
     #[serde(default)]
-    pub total_memory: u64,
+    pub total_memory: u32,
     #[serde(default)]
-    pub swiotlb_size: u64,
+    pub swiotlb_size: u32,
     #[serde(default)]
-    pub cma_size: u64,
+    pub cma_size: u32,
     #[serde(default)]
     pub cid: u64,
     #[serde(default)]
@@ -332,7 +332,8 @@ impl VmInstance {
         //Set SWIOTOLB
         unsafe{AVirtualMachineRawConfig_setSwiotlbMiB(config, self.vm_config.swiotlb_size as i32);}
 
-
+        //Set Private Mem (CMA + Scattered)
+        unsafe{AVirtualMachineRawConfig_setMemoryMiB(config, self.vm_config.total_memory as i32 - self.vm_config.swiotlb_size as i32);}
 
         //Encode the authentication in the instance ID
         /* Decode
@@ -360,14 +361,9 @@ impl VmInstance {
 
         //Adding the disk images
         for disk in &self.vm_config.disk{
-            let mut disk_image = None;
-            if disk.read_write == false {
-                disk_image =  Some(File::open(disk.image.clone()).context("Failed to open Disk Image")?);
-            }
-            else{
-                disk_image = Some(OpenOptions::new().read(true).write(true).open(disk.image.clone())?);
-            }
-            let disk_image_fd = disk_image.unwrap().into_raw_fd();
+
+            let disk_image =  File::open(disk.image.clone()).context("Failed to open Disk Image")?;
+            let disk_image_fd = disk_image.into_raw_fd();
             info!("Disk FD created! for {:?}",disk.image);
             unsafe{AVirtualMachineRawConfig_addDisk(config, disk_image_fd, disk.read_write);}
         }
@@ -391,28 +387,13 @@ impl VmInstance {
         let ref_dev_node = unsafe{&SafeDescriptor::from_raw_descriptor(dev_node_fd)};
         let cma_fd = unsafe { ioctl_with_val(ref_dev_node, GH_ANDROID_CREATE_CMA_MEM_FD, 0 as c_ulong) };
         let start_addr: u64 = 0x80000000;
-        let mut size: u64 = fstat(cma_fd).unwrap().st_size as u64;
-        info!("Max CMA Size = {:?}, ", size);
-        if (self.vm_config.cma_size as u64)*1024*1024 <= size {
-            /* Uncomment when kernel can support cma sizes less than the file size */
-            // size = self.vm_config.cma_size as u64 *1024*1024;
-            info!("CMA size = {:?}, Fd = {:?}", size, cma_fd);
-        }
-        else {
-            info!("CMA size is larger than its Carveout! Capping the size to the max")
-        }
+        let size: u64 = fstat(cma_fd).unwrap().st_size as u64;
         let end_addr: u64 = start_addr + size;
+
+        info!("CMA size = {:?}, Fd = {:?}", size, cma_fd);
 
         unsafe{AVirtualMachineRawConfig_addCustomMemoryBackingFile(config, cma_fd,
             start_addr,  end_addr);}
-
-        //If total memory is less than cma + shared, then set the private mem to be fully CMA size.
-        if self.vm_config.total_memory < (size / 1024 / 1024) + self.vm_config.swiotlb_size {
-            info!("Total mem is too low! it should be Private mem + Shared, setting it to CMA + Shared");
-            self.vm_config.total_memory = (size / 1024 / 1024) + self.vm_config.swiotlb_size;
-        }
-        //Set Private Mem (CMA + Scattered)
-        unsafe{AVirtualMachineRawConfig_setMemoryMiB(config, self.vm_config.total_memory as i32 - self.vm_config.swiotlb_size as i32);}
 
         //Create a tmp VM Dtbo and set it
         let slot_suffix = system_properties::read("ro.boot.slot_suffix")

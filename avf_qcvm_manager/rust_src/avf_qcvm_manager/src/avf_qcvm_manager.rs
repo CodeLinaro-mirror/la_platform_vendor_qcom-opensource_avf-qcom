@@ -2,6 +2,7 @@
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear */
 #![allow(non_snake_case)]
+#![allow(unused_imports)]
 #![allow(dead_code)]
 #![allow(unused_mut)]
 #![allow(non_upper_case_globals)]
@@ -22,7 +23,7 @@ use vendor_qti_AvfQcvmManager::aidl::vendor::qti::AvfQcvmManager::{
 use rustutils::system_properties;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 
-use avf_bindgen::{AVirtualizationService, AVirtualizationService_create};
+use avf_llndk_bindgen::{AVirtualizationService, AVirtualizationService_create};
 
 use crate::virtual_machine::{create_vm_info, VirtualMachine,
     VmConfig, State, VmInstance};
@@ -159,18 +160,16 @@ pub fn parse_vm_config_json() -> Result<Vec<VmConfig>>{
          .ok_or_else(|| anyhow!("slot_suffix is none"))?;
         match serde_json::from_value::<VmConfig>(config.to_owned()) {
             Ok(mut vm_config) => {
-                if vm_config.swiotlb_size == 0 {
-                    vm_config.swiotlb_size = 2;
-                }
-                if vm_config.num_vcpus == 0 {
-                    vm_config.num_vcpus = 4;
-                }
                 if vm_config.name == "trustedvm"{
                     vm_config.vm_id = 45;
                     vm_config.pas_id = 28;
                     if vm_config.cma_size == 0 {
                         vm_config.cma_size = 68;
                     }
+                    if vm_config.swiotlb_size == 0 {
+                        vm_config.swiotlb_size = 16;
+                    }
+                    vm_config.total_memory= vm_config.cma_size + vm_config.swiotlb_size;
                     if vm_config.vm_dtbo_path == String::from("") {
                         vm_config.vm_dtbo_path = format!("/dev/block/by-name/qtvm_dtbo{}",slot_suffix)
                     }
@@ -181,6 +180,9 @@ pub fn parse_vm_config_json() -> Result<Vec<VmConfig>>{
                     vm_config.pas_id = 34;
                     if vm_config.cma_size == 0 {
                         vm_config.cma_size = 76;
+                    }
+                    if vm_config.swiotlb_size == 0 {
+                        vm_config.swiotlb_size = 16;
                     }
                     vm_config.total_memory= vm_config.cma_size + vm_config.swiotlb_size;
                     if vm_config.vm_dtbo_path == String::from("") {
