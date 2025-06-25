@@ -29,7 +29,7 @@
                 "cma_size": 76,
                 "enabled": true,
                 "early_vm" : false,
-                "force_stop" : false,
+                "force_stop" : true,
                 "num_vcpus": 4,
                 "mink_uid": 808
             }
