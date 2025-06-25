@@ -1,31 +1,26 @@
 /*
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear */
-#![allow(non_snake_case)]
-#![allow(dead_code)]
-#![allow(unused_mut)]
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(unused_variables)]
+
 use binder::{
-    BinderFeatures, ExceptionCode, Interface, Status, Strong, ThreadState, ParcelFileDescriptor, Result as BinderResult
+    ExceptionCode, BinderFeatures, Interface, Strong, Status, Result as BinderResult
 };
-use std::{collections::HashMap, sync::{Arc, Mutex, Weak}, fmt::Debug};
-use log::{warn, info, error};
+use std::{collections::HashMap, sync::{Arc, Mutex}};
+use log::{info, error};
 use serde_json::Value;
-use std::fs::{File, set_permissions, create_dir, remove_dir_all, remove_file, Permissions};
+use std::fs::{File};
 use vendor_qti_AvfQcvmManager::aidl::vendor::qti::AvfQcvmManager::{
     IAvfQcvmManager::{
         BnAvfQcvmManager, IAvfQcvmManager, BpAvfQcvmManager
     }, VmInfo::VmInfo, IVirtualMachine::IVirtualMachine,
 };
 use rustutils::system_properties;
-use anyhow::{anyhow, bail, ensure, Context, Result};
-
-use avf_bindgen::{AVirtualizationService, AVirtualizationService_create};
+use anyhow::{anyhow, Context, Result};
 
 use crate::virtual_machine::{create_vm_info, VirtualMachine,
     VmConfig, State, VmInstance};
+
+use crate::to_binder_result;
 
 const VM_CONFIG_PATH: &str = "/vendor/etc/qcvm_config.json";
 
@@ -66,28 +61,22 @@ impl AvfQcvmManager{
         }
 
         let mut vm_map = HashMap::<VmConfig, Option<Strong<dyn IVirtualMachine>> >::new();
-        // let mut virtmgr_handle = Self::get_virtmgr()?;
         for vm_config in vm_configs{
-            let state = Arc::new(Mutex::new(State::STOPPED));
-            let mut vm_instance = VmInstance{
+            let state = Arc::new(Mutex::new(State::Stopped));
+            let vm_instance = VmInstance{
                 vm_config: vm_config.clone(),
                 state: Arc::downgrade(&state),
                 ..Default::default()
             };
-            // let _ = vm_instance.create_avf_config();
-            // vm_instance.avf_handle.virtmgr_service = Some(virtmgr_handle);
             let vm = VirtualMachine{
                 vm_instance: Arc::new(Mutex::new(vm_instance)),
                 main_state: state,
             };
             vm_map.insert(vm_config, Some(vm.to_binder()));
-
         }
 
         Ok(AvfQcvmManager { vm_map: Arc::new(vm_map), vm_infos })
     }
-
-
 
 }
 
@@ -118,7 +107,6 @@ impl IAvfQcvmManager for AvfQcvmManager{
                         // Make sure every client is using a reference to the same binder object
                         return Ok(vm_binder.clone());
                     }
-
                 }
             }
         }
@@ -127,9 +115,7 @@ impl IAvfQcvmManager for AvfQcvmManager{
             ExceptionCode::UNSUPPORTED_OPERATION,
             Some("vm not found in qcvm_config"),
         ));
-
     }
-
 }
 
 /// Returns a vector of Vm Configs
@@ -204,18 +190,6 @@ pub fn parse_vm_config_json() -> Result<Vec<VmConfig>>{
     Ok(vm_configs)
 }
 
-/// Binder requires results to have a Binder Status, move the error handling
-/// outside of HAL calls into other functions as much as possible.
-/// Converts results to Binder results that implement Binder Status
-pub fn to_binder_result<T, E: Debug>(result: Result<T, E>) -> BinderResult<T> {
-    result.map_err(|e| {
-        let message = format!("{:?}", e);
-        warn!("Returning binder error: {}", &message);
-        Status::new_exception_str(ExceptionCode::UNSUPPORTED_OPERATION, Some(message))
-    })
-}
-
-
 /// Cannot clone VmInfo since it is an AIDL interface, need to create a custom
 /// cloner.
 pub fn clone_vm_infos(vm_infos: &Vec<VmInfo>) -> Result<Vec<VmInfo>>{
@@ -234,8 +208,6 @@ pub fn clone_vm_infos(vm_infos: &Vec<VmInfo>) -> Result<Vec<VmInfo>>{
             mink_uid: vm_info.mink_uid.clone().try_into()?,
         };
         clone_infos.push(clone_info);
-
     }
     Ok(clone_infos)
-
 }
