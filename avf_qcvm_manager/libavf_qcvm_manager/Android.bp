@@ -1,0 +1,23 @@
+rust_library {
+    name: "libavf_qcvm_manager",
+    srcs: ["src/lib.rs"],
+    crate_name: "avf_qcvm_manager",
+    rustlibs: [
+        "vendor.qti.AvfQcvmManager-V1-rust",
+        "libavf_bindgen",
+        "libbinder_rs",
+        "liblog_rust",
+        "libserde_json",
+        "libserde",
+        "libvsock",
+        "libanyhow",
+        "liblogger",
+        "libbase_rust",
+        "librustutils",
+        "libzerocopy",
+        "libnix",
+    ],
+    shared_libs: ["libavf"],
+    vendor: true,
+    prefer_rlib: true,
+}
