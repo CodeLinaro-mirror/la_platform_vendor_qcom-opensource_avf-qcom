@@ -187,9 +187,7 @@ impl ProxyClientService {
 
 
             let instance_map = Arc::new(Mutex::new(vm_instance_map_local));
-            let monitor_thread_handle = Self::start_property_monitor_thread(instance_map.clone());
-            // Block the main thread until the property monitor thread completes
-            monitor_thread_handle.join().unwrap();
+            Self::property_monitor(VM_STOP_PROP.to_string(), instance_map.clone());
             return Self {
                 vm_instance_map: instance_map,
             };
@@ -232,16 +230,6 @@ impl ProxyClientService {
         }
 
         vm_names
-    }
-
-    fn start_property_monitor_thread(vm_instance_map: VmInstanceMap)-> std::thread::JoinHandle<()> {
-        info!("Starting property monitor thread");
-
-        let property = VM_STOP_PROP.to_string();
-        let handle = thread::spawn(move || {
-            Self::property_monitor(property, vm_instance_map);
-        });
-        handle
     }
 
     fn property_monitor(property: String, vm_instance_map: VmInstanceMap) {
