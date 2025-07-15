@@ -101,6 +101,13 @@ impl IAvfQcvmManager for AvfQcvmManager{
         for key in keys{
             // Find the VM in the map
             if key.name == String::from(vm_name){
+                if key.enabled == false{
+                    error!("getVm: {:?} is not enabled!!", key.name);
+                    return Err(Status::new_exception_str(
+                        ExceptionCode::UNSUPPORTED_OPERATION,
+                        Some("vm not enabled"),
+                    ));
+                }
                 if let Some(vm) = &map.get(&key){
                     // As_ref makes a clonable reference to the binder object
                     if let Some(vm_binder) = vm.as_ref(){
@@ -145,13 +152,13 @@ pub fn parse_vm_config_json() -> Result<Vec<VmConfig>>{
          .ok_or_else(|| anyhow!("slot_suffix is none"))?;
         match serde_json::from_value::<VmConfig>(config.to_owned()) {
             Ok(mut vm_config) => {
-                if vm_config.swiotlb_size == 0 {
-                    vm_config.swiotlb_size = 2;
-                }
                 if vm_config.num_vcpus == 0 {
                     vm_config.num_vcpus = 4;
                 }
                 if vm_config.name == "trustedvm"{
+                    if vm_config.swiotlb_size == 0 {
+                        vm_config.swiotlb_size = 2;
+                    }
                     vm_config.vm_id = 45;
                     vm_config.pas_id = 28;
                     if vm_config.cma_size == 0 {
@@ -163,6 +170,9 @@ pub fn parse_vm_config_json() -> Result<Vec<VmConfig>>{
                 }
                 //Assume it is a type of oemvm
                 else {
+                    if vm_config.swiotlb_size == 0 {
+                        vm_config.swiotlb_size = 4;
+                    }
                     vm_config.vm_id = 49;
                     vm_config.pas_id = 34;
                     if vm_config.cma_size == 0 {

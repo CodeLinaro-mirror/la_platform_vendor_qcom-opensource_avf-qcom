@@ -9,7 +9,7 @@ use log::warn;
 pub mod dtbo;
 pub mod avf_qcvm_manager;
 pub mod virtual_machine;
-
+pub mod guest_client;
 
 /// Binder requires results to have a Binder Status, move the error handling
 /// outside of HAL calls into other functions as much as possible.

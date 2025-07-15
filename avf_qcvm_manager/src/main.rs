@@ -7,7 +7,6 @@ use std::env;
 use log::{info};
 
 
-
 fn main() {
     binder::ProcessState::set_thread_pool_max_thread_count(12);
     binder::ProcessState::start_thread_pool();
