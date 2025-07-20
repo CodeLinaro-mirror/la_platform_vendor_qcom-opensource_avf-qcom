@@ -1,0 +1,10 @@
+<!--
+Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+SPDX-License-Identifier: BSD-3-Clause-Clear -->
+<early_vms>
+    <early_vm>
+        <name>oemvm</name>
+        <cid>302</cid>
+        <path>/vendor/bin/avf_qcvm_manager</path>
+    </early_vm>
+</early_vms>

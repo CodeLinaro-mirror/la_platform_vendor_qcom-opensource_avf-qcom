@@ -1,0 +1,13 @@
+//rust_fuzz {
+//    name: "avf_qcvm_manager_fuzzer",
+//    srcs: [
+//        "src/fuzzer.rs",
+//    ],
+//    rustlibs: [
+//        "libbinder_rs",
+//        "libavf_qcvm_manager",
+//        "libbinder_random_parcel_rs"
+//    ],
+//    vendor: true,
+//    prefer_rlib: true,
+//}

@@ -1,0 +1,42 @@
+prebuilt_etc{
+    name: "early_vms_trusted_vm",
+    srcs: ["early_vm_manifests/early_vms_trusted_vm.xml"],
+    proprietary: true,
+    sub_dir: "avf",
+}
+
+prebuilt_etc{
+    name: "early_vms_oem_vm",
+    srcs: ["early_vm_manifests/early_vms_oem_vm.xml"],
+    proprietary: true,
+    sub_dir: "avf",
+}
+
+rust_binary{
+    name: "avf_qcvm_manager",
+    srcs: ["src/main.rs"],
+    crate_name: "avf_qcvm_service",
+    edition: "2024",
+    rustlibs: [
+        "libbinder_rs",
+        "liblog_rust",
+        "liblogger",
+        "libavf_qcvm_manager"
+    ],
+    cfgs: select(release_flag("RELEASE_AVF_ENABLE_EARLY_VM"), {
+        true: ["early_vm_enabled"],
+        default: [],
+    }),
+    vendor: true,
+    init_rc: ["avf_qcvm_manager.rc"],
+    prefer_rlib: true,
+    vintf_fragments: ["avf_qcvm_manager.xml"],
+}
+
+prebuilt_etc {
+    name: "qcvm_config.json",
+    owner: "qti",
+    src: "qcvm_config.json",
+    vendor: true,
+}
+
