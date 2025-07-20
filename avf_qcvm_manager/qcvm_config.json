@@ -12,7 +12,7 @@
                ],
                 "kernel" : "/vendor/vm-system/trustedvm/boot/trustedvm.elf",
                 "swiotlb_size": 2,
-                "cma_size": 64,
+                "cma_size": 68,
                 "enabled": true,
                 "early_vm" : false,
                 "force_stop" : false,
