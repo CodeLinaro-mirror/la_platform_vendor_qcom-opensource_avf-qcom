@@ -5,6 +5,6 @@ SPDX-License-Identifier: BSD-3-Clause-Clear -->
     <early_vm>
         <name>oemvm</name>
         <cid>302</cid>
-        <path>/vendor/bin/avf_qcvm_manager</path>
+        <path>/vendor/bin/avf_qcvm_manager_rs</path>
     </early_vm>
 </early_vms>

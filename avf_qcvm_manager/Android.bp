@@ -13,20 +13,32 @@ prebuilt_etc{
 }
 
 rust_binary{
-    name: "avf_qcvm_manager",
+    name: "avf_qcvm_manager_rs",
     srcs: ["src/main.rs"],
-    crate_name: "avf_qcvm_service",
-    edition: "2024",
+    crate_name: "avf_test_client",
+    edition: "2021",
     rustlibs: [
+        "vendor.qti.AvfQcvmManager-V1-rust",
+        "libvmclient",
+        "libavf_bindgen",
         "libbinder_rs",
         "liblog_rust",
+        "libserde_json",
+        "libserde",
+        "libvsock",
+        "libanyhow",
         "liblogger",
-        "libavf_qcvm_manager"
+        "libbase_rust",
+        "librustutils",
+        "libzerocopy",
+        "libnix",
     ],
     cfgs: select(release_flag("RELEASE_AVF_ENABLE_EARLY_VM"), {
         true: ["early_vm_enabled"],
         default: [],
     }),
+    shared_libs: ["libavf"],
+
     vendor: true,
     init_rc: ["avf_qcvm_manager.rc"],
     prefer_rlib: true,

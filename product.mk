@@ -11,7 +11,7 @@ endif
 ifeq ($(PRODUCT_QC_AVF_ENABLE),true)
 PRODUCT_PACKAGES += early_vms_trusted_vm
 PRODUCT_PACKAGES += early_vms_oem_vm
-PRODUCT_PACKAGES += avf_qcvm_manager
+PRODUCT_PACKAGES += avf_qcvm_manager_rs
 PRODUCT_PACKAGES += qcvm_config.json
 PRODUCT_PACKAGES += vendor.qti.qtvm.proxyclient-service
 PRODUCT_PACKAGES_DEBUG += test_vm_client_rs

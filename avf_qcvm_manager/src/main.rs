@@ -1,10 +1,22 @@
 /*
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear */
-use avf_qcvm_manager::avf_qcvm_manager::AvfQcvmManager;
+#![allow(non_snake_case)]
+#![allow(unused_imports)]
+#![allow(dead_code)]
+#![allow(unused_mut)]
+#![allow(non_upper_case_globals)]
+#![allow(non_camel_case_types)]
+#![allow(unused_variables)]
+
+pub mod dtbo;
+pub mod avf_qcvm_manager;
+pub mod virtual_machine;
+
+use avf_qcvm_manager::*;
 use log::LevelFilter;
 use std::env;
-use log::{info};
+use log::{warn, info, error};
 
 
 
@@ -32,7 +44,7 @@ fn main() {
         avf_qcvm_manager_bndr.as_binder(),
     )
     .expect("Failed to register service.");
-    info!("AvfQcvmManager started!!");
+
     // Do not return
     binder::ProcessState::join_thread_pool()
 }
