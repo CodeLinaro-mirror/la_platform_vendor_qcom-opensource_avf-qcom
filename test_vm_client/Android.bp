@@ -28,3 +28,34 @@ cc_binary{
 
     proprietary: true,
 }
+
+rust_binary{
+    name: "avf_qcvm_test_client_rs",
+    srcs: ["avf_qcvm_test_client/rs_src/main.rs"],
+    rustlibs: [
+        "vendor.qti.AvfQcvmManager-V1-rust",
+        "liblogger",
+        "liblog_rust",
+        "libbinder_rs"
+
+    ],
+    prefer_rlib: true,
+    proprietary: true,
+}
+
+cc_binary{
+    name: "avf_qcvm_test_client_cpp",
+    srcs: ["avf_qcvm_test_client/cpp_src/*.cpp"],
+
+    static_libs: [
+        "vendor.qti.AvfQcvmManager-V1-ndk",
+    ],
+
+    shared_libs: [
+        "liblog",
+        "libbase",
+        "libbinder_ndk",
+    ],
+
+    proprietary: true,
+}
