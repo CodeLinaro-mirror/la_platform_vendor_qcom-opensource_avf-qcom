@@ -1,0 +1,28 @@
+rust_library_rlib {
+    name: "libguest_agent_client",
+    crate_name: "guest_agent_client",
+    srcs: ["src/lib.rs"],
+    rustlibs: [
+        "libvsock",
+        "libmink_interfaces",
+        "libminkipc",
+        "libmink_rs",
+        "liblog_rust",
+        "libserde",
+        "libciborium",
+        "libanyhow",
+        "libnix"
+    ],
+    vendor: true,
+}
+
+rust_binary {
+    name: "vsock_qcvm_sample",
+    srcs: ["src/sample_vsock.rs"],
+    rustlibs: [
+        "libanyhow",
+        "libguest_agent_client",
+    ],
+    prefer_rlib: true,
+    vendor: true,
+}

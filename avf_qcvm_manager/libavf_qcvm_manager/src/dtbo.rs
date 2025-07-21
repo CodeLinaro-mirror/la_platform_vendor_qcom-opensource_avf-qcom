@@ -1,30 +1,19 @@
 /*
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear */
-#![allow(non_snake_case)]
-#![allow(unused_imports)]
-#![allow(dead_code)]
-#![allow(unused_mut)]
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(unused_variables)]
 use nix::unistd::{chown, Uid};
-use std::fs::OpenOptions;
-use anyhow::{anyhow, bail, ensure, Context, Result};
-use log::{info, warn, error, debug};
-use std::fs::{read_to_string, File, set_permissions, create_dir, remove_dir_all, remove_file, Permissions};
+use anyhow::{anyhow, ensure, Context, Result};
+use log::{info, warn, debug};
+use std::fs::{File, set_permissions, create_dir, remove_dir_all, Permissions};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::raw::uid_t;
-use std::io::{self, BufWriter, BufReader, Write, Read, Seek, SeekFrom};
+use std::io::{ Write, Read, Seek, SeekFrom};
 use zerocopy::{
     byteorder::{BigEndian, U32},
     FromBytes,
 };
 
-use binder::ParcelFileDescriptor;
-
-use std::os::unix::io::{FromRawFd, RawFd};
-use std::path::{PathBuf, Path};
+use std::path::{PathBuf};
 
 pub const DT_TABLE_MAGIC: u32 = 0xd7b7ab1e;
 /// Directory in which to write disk image files used while running VMs.
@@ -93,7 +82,6 @@ pub struct DtTableHeader {
     _version: U32<BigEndian>,
 }
 
-
 #[repr(C)]
 #[derive(Debug, FromBytes)]
 pub struct DtTableEntry {
@@ -108,7 +96,6 @@ pub struct DtTableEntry {
     /// optional, must be zero if unused
     _custom: [U32<BigEndian>; 4],
 }
-
 
 pub fn get_dt_table_header(file: &mut File) -> Result<DtTableHeader> {
     let values = read_values(file, size_of::<DtTableHeader>(), 0)?;

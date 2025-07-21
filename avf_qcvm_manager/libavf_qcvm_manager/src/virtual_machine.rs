@@ -1,57 +1,24 @@
 /*
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * SPDX-License-Identifier: BSD-3-Clause-Clear */
-#![allow(non_snake_case)]
-#![allow(dead_code)]
-#![allow(unused_mut)]
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(unused_variables)]
-#![allow(unused_assignments)]
-
 use binder::{
-    ParcelFileDescriptor, Status, Strong, Result as BinderResult, Interface, BinderFeatures,
-    DeathRecipient, ThreadState, IBinder
+    BinderFeatures, Strong, Result as BinderResult, Interface,
+    DeathRecipient, IBinder
 };
-use base::ioctl_io_nr;
-use base::ioctl_iow_nr;
-use base::ioctl_with_ref;
-use base::ioctl_with_val;
-use base::errno_result;
-use base::SafeDescriptor;
-use base::FromRawDescriptor;
+use base::{ioctl_io_nr, ioctl_with_val, errno_result, SafeDescriptor, FromRawDescriptor};
 
 use serde::Deserialize;
 use std::thread;
-use std::{collections::HashMap, sync::{Arc, Mutex, Weak}, fmt::Debug};
+use std::{sync::{Arc, Mutex, Weak}, fmt::Debug};
 use std::ffi::CString;
-
-
-
 use rustutils::system_properties;
-use zerocopy::{
-    byteorder::{BigEndian, U32},
-    FromBytes,
-};
-
-
-use nix::unistd::{chown, Uid, close};
 use nix::sys::stat::fstat;
 use std::os::raw::c_ulong;
-
-use std::default;
-use std::fs::OpenOptions;
-use anyhow::{anyhow, bail, ensure, Context, Result};
-use log::{info, debug, warn, error, LevelFilter};
-use std::fs::{File, set_permissions, create_dir, remove_dir_all, remove_file, Permissions};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::raw::{pid_t, uid_t};
-use std::io::{self, BufWriter, Write, Read, Seek, SeekFrom};
+use anyhow::{anyhow, Context, Result};
+use log::{info, debug, error, warn};
+use std::fs::{File, OpenOptions, remove_file};
 use std::os::fd::IntoRawFd;
-use std::os::unix::io::{FromRawFd, RawFd};
-use std::path::{PathBuf, Path};
-use std::time::{Duration, Instant};
-use vsock::{VsockListener, VsockStream, VMADDR_CID_HOST};
+use std::os::unix::io::{RawFd};
 
 use avf_bindgen::{AVirtualMachine_createRaw,
     AVirtualMachineRawConfig_setHypervisorSpecificAuthMethod, AVirtualMachineRawConfig_setInstanceId,
@@ -59,53 +26,47 @@ use avf_bindgen::{AVirtualMachine_createRaw,
     AVirtualMachineRawConfig_addDisk, AVirtualMachineRawConfig_setMemoryMiB,
     AVirtualMachineRawConfig_setProtectedVm, AVirtualMachineRawConfig_setKernel,
     AVirtualMachineRawConfig_setName, AVirtualMachineRawConfig_create, AVirtualMachine,
-    AVirtualizationService, AVirtualMachine_waitForStop, AVirtualMachineStopReason,
-    AVirtualMachine_start, AVirtualMachine_stop, AVirtualMachine_destroy, AVirtualMachineRawConfig,
-    timespec, AVirtualMachineRawConfig_addCustomMemoryBackingFile,
+    AVirtualizationService, AVirtualizationService_destroy, AVirtualMachine_waitForStop,
+    AVirtualMachineStopReason, AVirtualMachine_start, AVirtualMachine_stop,
+    AVirtualMachine_destroy, AVirtualMachineRawConfig,AVirtualMachineRawConfig_addCustomMemoryBackingFile,
     AVirtualizationService_create, AVirtualMachineRawConfig_setDeviceTreeOverlay};
 
-
 use vendor_qti_AvfQcvmManager::aidl::vendor::qti::AvfQcvmManager::{
-    IAvfQcvmManager::{
-        BnAvfQcvmManager, IAvfQcvmManager
-    }, VmInfo::VmInfo, IVirtualMachine::{IVirtualMachine, BnVirtualMachine},
+    VmInfo::VmInfo, IVirtualMachine::{IVirtualMachine, BnVirtualMachine},
     IVirtualMachineCallback::IVirtualMachineCallback, VirtualMachineError::VirtualMachineError,
 };
 
-
 use crate::dtbo::*;
-use crate::avf_qcvm_manager::to_binder_result;
+use guest_agent_client::{ServiceId, GuestAgentClient};
+use crate::guest_client::*;
+use crate::to_binder_result;
 
-const VM_MEMORY_MB: i32 = 68;
-const SWIOTLB_MEMORY_MB: i32 = 16;
-const LOG_TAG: &str = "ssatter avf_test_client_rs";
-const STOP_TIMEOUT: timespec = timespec { tv_sec: 100, tv_nsec: 0 };
 const GH_ANDROID_IOCTL_TYPE: u8 = 65u8;
 const CMA_TUI_VM: &str = "/dev/trustedvm_cma";
 const CMA_OEM_VM: &str = "/dev/oemvm_cma";
-ioctl_io_nr!(GH_ANDROID_CREATE_CMA_MEM_FD, GH_ANDROID_IOCTL_TYPE, 0x14);
-
-static DEFAULT_BOOT_COMPLETE_TIMEOUT: u16 = 60;
-static DEFAULT_SHUTDOWN_TIMEOUT: u32 = 60;
-static DEFAULT_USERSPACE_WAIT_TIMER: u32 = 120;
+const VM_USERSPACE_RETRY: u32 = 3;
+// static DEFAULT_SHUTDOWN_TIMEOUT: u32 = 60;
+static DEFAULT_USERSPACE_TIMER: u32 = 10;
 static DEFAULT_FORCE_SHUTDOWN: bool = false;
+static DEFAULT_EARLY_VM: bool = true;
 
-fn boot_complete_timeout_default() -> u16 {
-    DEFAULT_BOOT_COMPLETE_TIMEOUT
-}
+ioctl_io_nr!(GH_ANDROID_CREATE_CMA_MEM_FD, GH_ANDROID_IOCTL_TYPE, 0x14);
 
 fn default_force_shutdown() -> bool {
     DEFAULT_FORCE_SHUTDOWN
 }
 
-fn default_userspace_wait_timer() -> u32{
-    DEFAULT_USERSPACE_WAIT_TIMER
+fn default_early_vm() -> bool {
+    DEFAULT_EARLY_VM
 }
 
-fn default_request_stop_timeout() -> u32{
-    DEFAULT_SHUTDOWN_TIMEOUT
+fn default_userspace_timer() -> u32{
+    DEFAULT_USERSPACE_TIMER
 }
 
+// fn default_request_stop_timeout() -> u32{
+//     DEFAULT_SHUTDOWN_TIMEOUT
+// }
 
 /// VmClient holds relevant information about the Client
 /// as well as a handle to their Callback and to their DeathRecipient
@@ -151,7 +112,7 @@ pub struct VmConfig {
     pub disk: Vec<DiskProperties>,
     #[serde(default)]
     pub kernel: String,
-    #[serde(default)]
+    #[serde(default = "default_early_vm")]
     pub early_vm: bool,
     #[serde(default)]
     pub total_memory: u64,
@@ -159,16 +120,16 @@ pub struct VmConfig {
     pub swiotlb_size: u64,
     #[serde(default)]
     pub cma_size: u64,
+    // #[serde(default)]
+    // pub cid: u64,
     #[serde(default)]
-    pub cid: u64,
-    #[serde(default)]
-    pub vsock_port: u64,
+    pub vsock_port: u32,
     #[serde(default = "default_force_shutdown")]
     pub force_stop: bool,
-    #[serde(default = "default_request_stop_timeout")]
-    pub shutdown_timer: u32,
-    #[serde(default = "default_userspace_wait_timer")]
-    pub userspace_ready_timer: u32,
+    // #[serde(default = "default_request_stop_timeout")]
+    // pub shutdown_timer: u32,
+    #[serde(default = "default_userspace_timer")]
+    pub userspace_timer: u32,
     #[serde(default)]
     pub mink_uid: u32,
     #[serde(default)]
@@ -191,11 +152,11 @@ pub struct VmConfig {
 /// Only has one strong reference object in VirtualMachine
 #[derive(Debug, Clone, Copy)]
 pub enum State{
-    STOPPED,
-    STARTED,
-    USERSPACE_READY,
-    SHUTTING_DOWN,
-    CRASHED,
+    Stopped,
+    Started,
+    UserspaceReady,
+    ShuttingDown,
+    Crashed,
 }
 
 /// This is a wrapper around the *mut AVirtualMachine
@@ -206,6 +167,13 @@ pub enum State{
 pub struct AVirtualMachineWrapper(Option<*mut AVirtualMachine>);
 unsafe impl Send for AVirtualMachineWrapper {}
 
+/// This is a wrapper around the *mut AVirtualizationService.
+/// This wrapper is needed to help share the C pointer between threads safely.
+/// It will be safe as long as it is wrapped with an Arc<Mutex<>>
+#[derive(Default, Debug)]
+pub struct AVirtmgrWrapper(Option<*mut AVirtualizationService>);
+unsafe impl Send for AVirtmgrWrapper {}
+
 
 /// This struct is to represent the handles to AVF unsafe objects
 /// Since these are raw C pointers, to share between thread, need to implement
@@ -214,7 +182,7 @@ unsafe impl Send for AVirtualMachineWrapper {}
 pub struct AvfHandle {
     pub avf_vm_handle: Arc<Mutex<AVirtualMachineWrapper>>,
     pub avf_config: Option<*mut AVirtualMachineRawConfig>,
-    pub virtmgr_service: Option<*mut AVirtualizationService>,
+    pub virtmgr_service: Arc<Mutex<AVirtmgrWrapper>>,
 }
 
 unsafe impl Send for AvfHandle {}
@@ -237,6 +205,10 @@ pub struct VmInstance{
     pub state: Weak<Mutex<State>>,
     /** Need a thread to wait until the VM stops when clients request for a stop */
     pub wait_for_stop_thread: Arc<Mutex<Option<thread::JoinHandle<Result<()>>>>>,
+    /** This is an object to hold a reference for the shutdown Mink Service */
+    pub guest_client: Arc<Mutex<Option<GuestClient>>>,
+    /** Wait till the Userspace is ready */
+    pub wait_for_userspace_thread: Arc<Mutex<Option<thread::JoinHandle<Result<()>>>>>,
 }
 
 impl VmInstance {
@@ -245,22 +217,40 @@ impl VmInstance {
     /// to boot the VM.
     pub fn start_vm(&mut self) -> Result<()>{
 
-        //Create an instance of Virtmgr
-        self.get_virtmgr()?;
+        {
+            let virtmgr_service_lock = Arc::clone(&self.avf_handle.virtmgr_service);
+            let virtmgr = virtmgr_service_lock.lock().unwrap();
+            match virtmgr.0 {
+                Some(service) => {
+                    if service.is_null() {
+                        //Create an instance of Virtmgr
+                        self.get_virtmgr()?;
+                    }
+
+                },
+                None => {
+                    //Create an instance of Virtmgr
+                    self.get_virtmgr()?;
+                }
+            }
+        }
 
         // Set up the AVF Config -> this object dies when the VM dies
         self.create_avf_config()?;
 
+        let virtmgr_service_lock = Arc::clone(&self.avf_handle.virtmgr_service);
+        let virtmgr = virtmgr_service_lock.lock().unwrap();
         let mut vm = std::ptr::null_mut();
         let res = unsafe {
             // Create an AVF Virtual Machine object
             AVirtualMachine_createRaw(
-                self.avf_handle.virtmgr_service.unwrap(), self.avf_handle.avf_config.unwrap(), -1, // console_in
+                virtmgr.0.unwrap(), self.avf_handle.avf_config.unwrap(), -1, // console_in
                 -1, // console_out
                 -1, // log
                 &mut vm,
             )
         };
+        drop(virtmgr);
 
         if res != 0 {
             info!("we have failed to make a VM");
@@ -271,9 +261,12 @@ impl VmInstance {
         unsafe {
             AVirtualMachine_start(vm);
         }
-        info!(" Crosvm Launched!");
+        info!("Crosvm Launched!");
 
         self.avf_handle.avf_vm_handle = Arc::new(Mutex::new(AVirtualMachineWrapper(Some(vm))));
+
+        // Start the wait for userspace thread
+        self.wait_for_userspace()?;
 
         // Set up the stop thread to wait for stop immediately in case of crashes
         self.wait_for_stop()?;
@@ -281,7 +274,6 @@ impl VmInstance {
         Ok(())
 
     }
-
 
     /// This method is to create an instance of virtmgr. It needs to be recreated
     /// each time because the type of virtmgr depends on the VM. A VM can use
@@ -292,31 +284,34 @@ impl VmInstance {
         let mut service = std::ptr::null_mut();
 
         if self.vm_config.early_vm == true{
-            ensure!(
-                // SAFETY: &mut service is a valid pointer to *AVirtualizationService
-                unsafe { AVirtualizationService_create(&mut service, true) } == 0,
-                "AVirtualizationService_create failed for Early Virtmgr"
-            );
+
+            // SAFETY: &mut service is a valid pointer to *AVirtualizationService
+            let res = unsafe { AVirtualizationService_create(&mut service, true) };
+            if res != 0 {
+                return Err(anyhow!("AVirtualizationService_create failed for Early Virtmgr"));
+            }
+
+            info!("Early Virtmgr started! {:?}", service);
         }
         else{
-            ensure!(
-                // SAFETY: &mut service is a valid pointer to *AVirtualizationService
-                unsafe { AVirtualizationService_create(&mut service, false) } == 0,
-                "AVirtualizationService_create failed for Virtmgr"
-            );
+            let res = unsafe { AVirtualizationService_create(&mut service, false) };
+            if res != 0 {
+                return Err(anyhow!("AVirtualizationService_create failed for Virtmgr"));
+            }
+
+            info!("Virtmgr started! {:?}", service);
         }
-        info!("Virtmgr started! {:?}", service);
-        self.avf_handle.virtmgr_service = Some(service);
+
+        self.avf_handle.virtmgr_service = Arc::new(Mutex::new(AVirtmgrWrapper(Some(service))));
         Ok(())
     }
-
 
     /// Sets up all the VM config for AVF to pass to Crosvm
     pub fn create_avf_config(&mut self) -> Result<()>{
 
         //Creating AVF Config
-        let mut config = unsafe { AVirtualMachineRawConfig_create() };
-        info!("raw config created");
+        let config = unsafe { AVirtualMachineRawConfig_create() };
+        debug!("raw config created");
         let cstring = CString::new(self.vm_config.name.clone().as_str())?;
         unsafe{AVirtualMachineRawConfig_setName(config, cstring.as_ptr());}
 
@@ -331,8 +326,6 @@ impl VmInstance {
 
         //Set SWIOTOLB
         unsafe{AVirtualMachineRawConfig_setSwiotlbMiB(config, self.vm_config.swiotlb_size as i32);}
-
-
 
         //Encode the authentication in the instance ID
         /* Decode
@@ -353,40 +346,42 @@ impl VmInstance {
 
         //Creating Kernel FD
         let kernel_file =
-            File::open(&self.vm_config.kernel).context("Failed to open kernel file")?;
+            File::open(&self.vm_config.kernel).expect("Failed to open kernel file");
         let kernel_fd = kernel_file.into_raw_fd();
-        info!("Kernel FD created! {:?}",kernel_fd);
+        debug!("Kernel FD created! {:?}",kernel_fd);
         unsafe{AVirtualMachineRawConfig_setKernel(config, kernel_fd);}
 
         //Adding the disk images
         for disk in &self.vm_config.disk{
-            let mut disk_image = None;
             if disk.read_write == false {
-                disk_image =  Some(File::open(disk.image.clone()).context("Failed to open Disk Image")?);
+                let read_disk_image =  File::open(disk.image.clone()).expect("Failed to open Disk Image");
+                let disk_image_fd = read_disk_image.into_raw_fd();
+                info!("Disk FD created! for {:?}",disk.image);
+                unsafe{AVirtualMachineRawConfig_addDisk(config, disk_image_fd, disk.read_write);}
             }
             else{
-                disk_image = Some(OpenOptions::new().read(true).write(true).open(disk.image.clone())?);
+                let write_disk_image = OpenOptions::new().read(true).write(true).open(disk.image.clone())?;
+                let disk_image_fd = write_disk_image.into_raw_fd();
+                info!("Disk FD created! for {:?}",disk.image);
+                unsafe{AVirtualMachineRawConfig_addDisk(config, disk_image_fd, disk.read_write);}
             }
-            let disk_image_fd = disk_image.unwrap().into_raw_fd();
-            info!("Disk FD created! for {:?}",disk.image);
-            unsafe{AVirtualMachineRawConfig_addDisk(config, disk_image_fd, disk.read_write);}
+
         }
 
         //Creating CMA FD
-        let mut dev_node: Option<File> = None;
         info!("CMA FD VM name = {:?}", &self.vm_config.name);
-        dev_node = match self.vm_config.name.as_str() {
+        let dev_node = match self.vm_config.name.as_str() {
             "trustedvm" =>  {
-                info!("trustedvm CMA");
+                debug!("trustedvm CMA");
                 Some(File::open(CMA_TUI_VM).expect("Failed to open dev node file"))
             },
             _ => {
-                info!("oemvm CMA");
+                debug!("oemvm CMA");
                 Some(File::open(CMA_OEM_VM).expect("Failed to open dev node file"))
             }
         };
 
-        let mut dev_node_file = dev_node.unwrap();
+        let dev_node_file = dev_node.unwrap();
         let dev_node_fd = dev_node_file.into_raw_fd();
         let ref_dev_node = unsafe{&SafeDescriptor::from_raw_descriptor(dev_node_fd)};
         let cma_fd = unsafe { ioctl_with_val(ref_dev_node, GH_ANDROID_CREATE_CMA_MEM_FD, 0 as c_ulong) };
@@ -394,8 +389,7 @@ impl VmInstance {
         let mut size: u64 = fstat(cma_fd).unwrap().st_size as u64;
         info!("Max CMA Size = {:?}, ", size);
         if (self.vm_config.cma_size as u64)*1024*1024 <= size {
-            /* Uncomment when kernel can support cma sizes less than the file size */
-            // size = self.vm_config.cma_size as u64 *1024*1024;
+            size = self.vm_config.cma_size as u64 *1024*1024;
             info!("CMA size = {:?}, Fd = {:?}", size, cma_fd);
         }
         else {
@@ -405,12 +399,21 @@ impl VmInstance {
 
         unsafe{AVirtualMachineRawConfig_addCustomMemoryBackingFile(config, cma_fd,
             start_addr,  end_addr);}
-
-        //If total memory is less than cma + shared, then set the private mem to be fully CMA size.
-        if self.vm_config.total_memory < (size / 1024 / 1024) + self.vm_config.swiotlb_size {
-            info!("Total mem is too low! it should be Private mem + Shared, setting it to CMA + Shared");
+        // If we are debuggable, the total memory can also include private scattered mem
+        let is_debuggable = system_properties::read("ro.debuggable")
+         .context("Failed to read ro.debuggable")?
+         .ok_or_else(|| anyhow!("ro.debuggable is none"))?;
+        if is_debuggable == String::from("0") {
             self.vm_config.total_memory = (size / 1024 / 1024) + self.vm_config.swiotlb_size;
         }
+        else{
+            //If total memory is less than cma + shared, then set the private mem to be fully CMA size.
+            if self.vm_config.total_memory < (size / 1024 / 1024) + self.vm_config.swiotlb_size {
+                info!("Total mem is too low! it should be Private mem + Shared, setting it to CMA + Shared");
+                self.vm_config.total_memory = (size / 1024 / 1024) + self.vm_config.swiotlb_size;
+            }
+        }
+
         //Set Private Mem (CMA + Scattered)
         unsafe{AVirtualMachineRawConfig_setMemoryMiB(config, self.vm_config.total_memory as i32 - self.vm_config.swiotlb_size as i32);}
 
@@ -419,7 +422,6 @@ impl VmInstance {
          .context("Failed to read ro.boot.slot_suffix")?
          .ok_or_else(|| anyhow!("slot_suffix is none"))?;
         self.get_vm_dtbo(format!("/dev/block/by-name/qtvm_dtbo{}",slot_suffix))?;
-
 
         unsafe{
             AVirtualMachineRawConfig_setDeviceTreeOverlay(config, self.vm_dtbo_fd.clone().unwrap());
@@ -430,32 +432,30 @@ impl VmInstance {
 
     }
 
-
     /// Meant to be implemented once ABL sets up the ro board properties
     fn get_vm_dtbo_index(&self) -> Result<i32>{
         let name = self.vm_config.name.clone();
               match name.as_str(){
               "trustedvm" => {
-                               let tuivm_sys_prop =  system_properties::read("ro.boot.hypervisor.tuivm_dtbo_idx")
-                               .context("Failed to read vm_dtbo_idx")?
-                               .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
+                    let tuivm_sys_prop =  system_properties::read("ro.boot.hypervisor.tuivm_dtbo_idx")
+                    .context("Failed to read vm_dtbo_idx")?
+                    .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
 
-                               let tuivm_idx: i32 = tuivm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
-                               info!("Tuivm Index: {tuivm_idx}");
-                               return Ok(tuivm_idx);
-                            },
-                      _ =>  {
-                               let oemvm_sys_prop =  system_properties::read("ro.boot.hypervisor.oemvm_dtbo_idx")
-                               .context("Failed to read vm_dtbo_idx")?
-                               .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
+                    let tuivm_idx: i32 = tuivm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
+                    info!("Tuivm Index: {tuivm_idx}");
+                    return Ok(tuivm_idx);
+                },
+            _ =>  {
+                    let oemvm_sys_prop =  system_properties::read("ro.boot.hypervisor.oemvm_dtbo_idx")
+                    .context("Failed to read vm_dtbo_idx")?
+                    .ok_or_else(|| anyhow!("vm_dtbo_idx is none"))?;
 
-                               let oemvm_idx: i32 = oemvm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
-                               info!("oemvm Index: {oemvm_idx}");
-                               return Ok(oemvm_idx);
-                            }
+                    let oemvm_idx: i32 = oemvm_sys_prop.parse().context("vm_dtbo_idx is not an integer")?;
+                    info!("oemvm Index: {oemvm_idx}");
+                    return Ok(oemvm_idx);
+                }
               };
     }
-
 
     /// Sets up the VM DTBO FD to pass to AVF. It will first copy the contents
     /// from the vm_dtbo.img  and place it in a tmp file. Then it will cache the FD
@@ -486,63 +486,111 @@ impl VmInstance {
             &dt_table_entry,
             temp_path.clone(),
             &mut dtbo_tmp_file)?;
-        let mut dtbo_tmp_file = File::open(&temp_path).context("Failed to create VM DTBO file")?;
-        info!("dtbo_file {:?}", dtbo_tmp_file);
+        let dtbo_tmp_file = File::open(&temp_path).context("Failed to create VM DTBO file")?;
+        debug!("dtbo_file {:?}", dtbo_tmp_file);
         self.vm_dtbo_fd = Some(dtbo_tmp_file.into_raw_fd());
-        info!("dtbo raw fd = {:?}", self.vm_dtbo_fd.clone().unwrap());
+        debug!("dtbo raw fd = {:?}", self.vm_dtbo_fd.clone().unwrap());
         Ok(())
     }
 
-
     /// Notifies all registered clients about a change in the VM state
     pub fn notify_clients(vm_clients: &Vec<VmClient>, strong_state: State) -> Result<()>{
+        info!("Notifying clients about update VM state: {:?}", strong_state);
         for client in vm_clients{
             let cb = client.vm_client_callback.clone().unwrap();
             match strong_state {
-                State::STARTED => cb.onStarting()?,
-                State::USERSPACE_READY => cb.onUserspaceReady()?,
-                State::SHUTTING_DOWN => cb.onShutdownInitiated()?,
-                State::STOPPED => cb.onStopped()?,
-                State::CRASHED => cb.onCrashed()?,
+                State::Started => cb.onStarting()?,
+                State::UserspaceReady => cb.onUserspaceReady()?,
+                State::ShuttingDown => cb.onShutdownInitiated()?,
+                State::Stopped => cb.onStopped()?,
+                State::Crashed => cb.onCrashed()?,
             }
         }
 
         Ok(())
     }
 
+    pub fn wait_for_userspace(&mut self) -> Result<()>{
+        let vm_name = self.vm_config.name.clone();
+        let userspace_timer = self.vm_config.userspace_timer.clone();
+        let mink_uid = self.vm_config.mink_uid.clone();
+        let vsock_port = self.vm_config.vsock_port.clone();
+        let strong_state = Weak::upgrade(&self.state);
+        let vm_clients_lock = Arc::clone(&self.vm_clients);
+        let guest_client_lock = Arc::clone(&self.guest_client);
+        let thread = thread::spawn(move|| -> Result<()>{
+            debug!("Entered Wait for Userspace Thread for {:?}", vm_name);
+            //By default userspace ready is being determined by vsock
+            let mut service_id = ServiceId::VsockPort(vsock_port);
+            if mink_uid != 0 {
+                service_id = ServiceId::MinkUid(mink_uid);
+            }
+            // The Guest client shouldn't be used until the connect userspace is finished
+            let mut guest_client = guest_client_lock.lock().unwrap();
+            info!("Connecting to {:?} userspace", vm_name);
+            let guest_handle = match GuestClient::connect_userspace(VM_USERSPACE_RETRY,
+                    userspace_timer, service_id) {
+                Ok(guest_client) => guest_client,
+                Err(e) => {
+                    *guest_client = None;
+                    return Err(anyhow!("Failed to connect to {:?} Guest Service {:?}",vm_name, e));
+                }
+            };
+            info!("Successfully connected to {:?} userspace!", vm_name);
+            *guest_client = Some(guest_handle);
+            if let Some(state_lock) = strong_state{
+                let mut state = state_lock.lock().unwrap();
+                *state = State::UserspaceReady;
+                let vm_clients = vm_clients_lock.lock().unwrap();
+                Self::notify_clients( &*vm_clients, *state)?;
+                return Ok(());
+            }
+            return Err(anyhow!("State object has died"));
+        });
+        self.wait_for_userspace_thread = Arc::new(Mutex::new(Some(thread)));
+        Ok(())
+    }
 
     /// Creates a stop thread for the VM to get notified when the VM has stopped
     /// asynchronously. It will also notify all the clients about whether it stopped
     /// via a Crash or not.
     pub fn wait_for_stop(&mut self) -> Result<()>{
         let vm_lock = Arc::clone(&self.avf_handle.avf_vm_handle);
+        let virtmgr_service_lock = Arc::clone(&self.avf_handle.virtmgr_service);
         let vm_name = self.vm_config.name.clone();
         let strong_state = Weak::upgrade(&self.state);
         let vm_clients_lock = Arc::clone(&self.vm_clients);
         let thread = thread::spawn(move|| -> Result<()>{
-            info!("Entered Wait for stop thread");
-            let mut wrapper = vm_lock.lock().unwrap();
-            let vm = wrapper.0.unwrap().clone();
-            drop(wrapper);
-            drop(vm_lock);
+            info!("Entered Wait for stop thread for {:?}", vm_name);
+            let vm_wrapper = vm_lock.lock().unwrap();
+            let vm = vm_wrapper.0.unwrap().clone();
+            drop(vm_wrapper);
+            let mut virtmgr_wrapper = virtmgr_service_lock.lock().unwrap();
+            let virtmgr = virtmgr_wrapper.0.unwrap().clone();
+            virtmgr_wrapper.0 = None;
+            drop(virtmgr_wrapper);
             let mut stop_reason = AVirtualMachineStopReason::AVIRTUAL_MACHINE_KILLED;
             info!("Waiting for {:?} to stop", vm_name);
             unsafe{AVirtualMachine_waitForStop(vm, std::ptr::null_mut(), &mut stop_reason)};
             info!("{:?} VM has stopped for {:?}", vm_name, stop_reason);
-
+            // Destroy all handles to Virtmgr and the VM in AVF so Virtmgr can close
+            unsafe{AVirtualMachine_destroy(vm);}
+            unsafe{AVirtualizationService_destroy(virtmgr)};
+            info!("{:?} Virtmgr has been destroyed", vm_name);
             if let Some(state_lock) = strong_state{
                 let mut state = state_lock.lock().unwrap();
-                if stop_reason == AVirtualMachineStopReason::AVIRTUAL_MACHINE_CRASH {
-                    *state = State::CRASHED;
+                if stop_reason == AVirtualMachineStopReason::AVIRTUAL_MACHINE_CRASH ||
+                    stop_reason == AVirtualMachineStopReason::AVIRTUAL_MACHINE_START_FAILED {
+                    *state = State::Crashed;
                     info!("{:?} VM has crashed", vm_name);
                 }
                 else{
-                    *state = State::STOPPED;
+                    *state = State::Stopped;
                     info!("{:?} has stopped successfully", vm_name);
                 }
                 let mut vm_clients = vm_clients_lock.lock().unwrap();
                 Self::notify_clients( &*vm_clients, *state)?;
-                let mut clients = &mut vm_clients;
+                let clients = &mut vm_clients;
                 clients.clear();
 
                 return Ok(());
@@ -552,9 +600,12 @@ impl VmInstance {
 
         self.wait_for_stop_thread = Arc::new(Mutex::new(Some(thread)));
 
+        debug!("Stopped thread stored successfully");
+
         Ok(())
     }
 
+    // pub fn stop_vm(force: bool, stop_service_handle:)
 
     /// This function is to determine if a client already is registered
     pub fn find_client(&self, cb: &Strong<dyn IVirtualMachineCallback>) -> bool{
@@ -566,10 +617,6 @@ impl VmInstance {
         }
         true
     }
-
-
-
-
 }
 
 /// ===========================================================
@@ -592,7 +639,7 @@ impl VirtualMachine{
     pub fn new() -> Self{
         VirtualMachine{
             vm_instance: Default::default(),
-            main_state: Arc::new(Mutex::new(State::STOPPED)),
+            main_state: Arc::new(Mutex::new(State::Stopped)),
         }
     }
 
@@ -601,43 +648,83 @@ impl VirtualMachine{
     pub fn create_client(&self, cb: &Strong<dyn IVirtualMachineCallback>) -> BinderResult<()>{
         let cb_clone = cb.clone();
         let death_lock = Arc::clone(&self.vm_instance);
-        let mut vm_instance = death_lock.lock().unwrap();
+        let vm_instance = death_lock.lock().unwrap();
         if vm_instance.find_client(&cb) == true {
             info!("This Client already registered");
             return Ok(());
         }
         let vm_name = vm_instance.vm_config.name.clone();
         let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
+        let guest_client_lock = Arc::clone(&vm_instance.guest_client);
+        let state_lock = Arc::clone(&self.main_state);
+        // let shutdown_thread_lock = Arc::clone(&vm_instance.wait_for_stop_thread);
+        let userspace_ready_thread_lock = Arc::clone(&vm_instance.wait_for_userspace_thread);
         let mut death_recipient = DeathRecipient::new(move ||{
-            info!("Received a death recipient");
-            let mut vm_clients = vm_clients_lock.lock().unwrap();
-            if let Some(idx) = vm_clients.iter().position(|client|
-                client.vm_client_callback.as_ref().cloned().unwrap().eq(&cb_clone))
-                {
-                    let client  = vm_clients.get(idx).unwrap();
-                    info!(
-                        "Cleared the callback object for {}!",
-                        vm_name);
-                    vm_clients.remove(idx);
+                info!("Received a death recipient");
+                let mut vm_clients = vm_clients_lock.lock().unwrap();
+                if let Some(idx) = vm_clients.iter().position(|client|
+                    client.vm_client_callback.as_ref().cloned().unwrap().eq(&cb_clone))
+                    {
+                        info!(
+                            "Cleared the callback object for {}!",
+                            vm_name);
+                        vm_clients.remove(idx);
+                    }
+                // Todo: Figure out why the Userspace ready thread shows up as none
+                // The thread is clearly still running and hasn't joined because the state
+                // is Started, if userspace joined it would've been UserspaceReady.
+                // Since I know its not joined, the only option is it is not being set,
+                // but if the state is Started, that means start_vm() exited successfully.
+                // Final option, there is something that is taking and joining the thread
+                // in between the calls.
+                if vm_clients.len() == 0 {
+                    info!("All Clients for {:?} has disconnected, will try to request shutdown", vm_name);
+                    //drop the clients handle,
+                    drop(vm_clients);
+
+                    {
+                        let state = state_lock.lock().unwrap();
+                        //Wait for userspace to connect first
+                        if let State::Started = *state {
+                            //The userspace thread needs this lock, drop it so that it can pick it up
+                            drop(state);
+                            let mut userspace_ready_thread = userspace_ready_thread_lock.lock().unwrap();
+                            info!("Wait till userspace connects before shutting down");
+                            //Wait to join the userspace ready thread.
+                            if let Some(handle) = userspace_ready_thread.take() {
+                                match handle.join() {
+                                    Ok(Ok(())) => info!("Userspace thread joined successfully"),
+                                    Ok(Err(e)) => error!("Cannot request to shutdown, the VM Guest Service could not connect {:?} ", e),
+                                    Err(e) => error!("Failed to join userspace thread: {:?}", e),
+                                    }
+                            } else {
+                                warn!("Userspace thread was already taken or joined alrady");
+                            }
+                        }
+                    }
+                    let mut state = state_lock.lock().unwrap();
+                    info!("Calling shutdown on the Guest Agent");
+                    let guest_client = guest_client_lock.lock().unwrap();
+                    if let State::UserspaceReady = *state {
+                        // There are no clients connected,
+                        // no need to check when the shutdown thread joins
+                        let _ = guest_client.as_ref().unwrap().shutdown();
+                        *state = State::ShuttingDown;
+                    }
+
                 }
             });
         let mut cb_binder = cb.as_binder();
         cb_binder.link_to_death(&mut death_recipient)?;
         let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
         let mut vm_clients = vm_clients_lock.lock().unwrap();
-        let index = vm_clients.len();
         info!("Created a client instance! Adding to list of Clients");
-
         vm_clients.push(VmClient{
             vm_client_callback: Some(cb.clone()),
             death_recipient: Some(death_recipient),
         });
         Ok(())
     }
-
-
-
-
 }
 
 impl Interface for VirtualMachine{
@@ -651,7 +738,7 @@ impl IVirtualMachine for VirtualMachine{
     /// configuration
     fn getVmInfo(&self) -> BinderResult<VmInfo>{
         let vm_instance_lock = Arc::clone(&self.vm_instance);
-        let mut vm_instance = vm_instance_lock.lock().unwrap();
+        let vm_instance = vm_instance_lock.lock().unwrap();
         let vm_config = vm_instance.vm_config.clone();
         let vm_info = to_binder_result(create_vm_info(&vm_config))?;
         info!("VM Info {:?}", vm_info);
@@ -670,72 +757,84 @@ impl IVirtualMachine for VirtualMachine{
         let mut vm_instance = vm_instance_lock.lock().unwrap();
             let _ = match *state {
                 //The VM is already starting, just add the client and notify it.
-                State::STARTED => {
+                State::Started => {
                     info!("{:?} was starting, return back", vm_instance.vm_config.name);
-                    cb.onStarting()?;
+                    let _  = cb.onStarting();
                 },
                 //The VM already started and in Userspace, just add the client
                 //and notify it.
-                State::USERSPACE_READY => {
+                State::UserspaceReady => {
                     info!("{:?} Usespace is already ready, return back", vm_instance.vm_config.name);
-                    cb.onUserspaceReady()?;
+                    let _ = cb.onUserspaceReady();
                 }
                 //You can try to start, but may not always work.
-                State::CRASHED => {
+                State::Crashed => {
                     cb.onCrashed()?;
                     info!("{:?} VM has crashed but will try to start the VM",vm_instance.vm_config.name);
-                    let _ = to_binder_result(vm_instance.start_vm())?;
-                    *state = State::STARTED;
-                    let mut vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
+                    match vm_instance.start_vm(){
+                        Ok(()) => info!("{:?} VM is starting!", vm_instance.vm_config.name),
+                        Err(e) => {
+                            error!("{:?} VM failed to start, reason: {:?}", vm_instance.vm_config.name, e);
+                            let _ = cb.onError(VirtualMachineError::FAILED_START);
+                        }
+                    };
+                    *state = State::Started;
+                    let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
                     let vm_clients= vm_clients_lock.lock().unwrap();
                     to_binder_result(VmInstance::notify_clients(&*vm_clients,state.clone()))?;
 
                 },
                 //This shouldn't be hit, but in case, the client should wait until they received an onStopped()
-                State::SHUTTING_DOWN => {
+                State::ShuttingDown => {
                     info!("{:?} VM is shutting down call start after the VM has stopped",vm_instance.vm_config.name);
-                    cb.onShutdownInitiated()?
+                    let _ = cb.onShutdownInitiated();
                 },
 
                 //Add the client, notify you are starting the VM. Then try starting
                 //the vm.
-                State::STOPPED => {
+                State::Stopped => {
                     info!("VM was stopped, needs to start");
-                    to_binder_result(vm_instance.start_vm())?;
-                    *state = State::STARTED;
-                    let mut vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
+                    match vm_instance.start_vm(){
+                        Ok(()) => info!("{:?} VM is starting!", vm_instance.vm_config.name),
+                        Err(e) => {
+                            error!("{:?} VM failed to start, reason: {:?}", vm_instance.vm_config.name, e);
+                            let _ = cb.onError(VirtualMachineError::FAILED_START);
+                        }
+                    };
+                    *state = State::Started;
+                    let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
                     let vm_clients= vm_clients_lock.lock().unwrap();
                     to_binder_result(VmInstance::notify_clients(&*vm_clients,state.clone()))?;
                 },
             };
-
+        info!("state has been dropped");
         Ok(())
     }
-
 
     /// Stop the VM forcibly. Using the AVF APIs, call destroy and clean up the
     /// AVF objects. Wait until the stop thread joins.
     fn stop(&self, _arg_callback: &Strong<dyn IVirtualMachineCallback>) -> BinderResult<()>{
         let cb = _arg_callback.clone();
         let vm_instance_lock = Arc::clone(&self.vm_instance);
-        let mut vm_instance = vm_instance_lock.lock().unwrap();
+        let vm_instance = vm_instance_lock.lock().unwrap();
         if vm_instance.vm_config.force_stop == false {
-            cb.onError(VirtualMachineError::FAILED_STOP)?;
+            let _ = cb.onError(VirtualMachineError::FAILED_STOP);
+            error!("Force kill is not enabled for {:?}, try request_stop()", vm_instance.vm_config.name);
             return Ok(());
         }
         if vm_instance.find_client(&cb) == false {
-            info!("This Client is not registered! Clients need to register with start() first");
-            cb.onError(VirtualMachineError::FAILED_STOP)?;
+            error!("This Client is not registered! Clients need to register with start() first");
+            let _ = cb.onError(VirtualMachineError::FAILED_STOP);
             return Ok(());
         }
         let state_lock = Arc::clone(&self.main_state);
         let mut state = state_lock.lock().unwrap();
         let _ = match *state{
-            State::STARTED | State::USERSPACE_READY => {
+            State::Started | State::UserspaceReady => {
                 info!("VM State is {:?}", state);
-                *state = State::SHUTTING_DOWN;
+                *state = State::ShuttingDown;
                 info!("{:?} VM is shutting down!", vm_instance.vm_config.name);
-                let mut vm_client_lock = Arc::clone(&vm_instance.vm_clients);
+                let vm_client_lock = Arc::clone(&vm_instance.vm_clients);
                 let vm_clients = vm_client_lock.lock().unwrap();
                 to_binder_result(VmInstance::notify_clients(&*vm_clients, state.clone()))?;
                 //Don't want to hold this mutex, stop thread will need need it
@@ -743,8 +842,8 @@ impl IVirtualMachine for VirtualMachine{
                 let wrapper = Arc::clone(&vm_instance.avf_handle.avf_vm_handle);
                 let vm = wrapper.lock().unwrap().0.unwrap().clone();
                 //Removes the virtmgr instance and the VM to clean up
-                unsafe{AVirtualMachine_destroy(vm);}
-                info!("Called destroy on {:?}", vm_instance.vm_config.name);
+                unsafe{AVirtualMachine_stop(vm);}
+                info!("Called stop on {:?}", vm_instance.vm_config.name);
 
                 //Drop the mutexs' here so that the stop thread can use them
                 drop(state);
@@ -754,51 +853,76 @@ impl IVirtualMachine for VirtualMachine{
                 //Wait to join the stop thread.
                 let thread_res = to_binder_result(shutdown_thread.take().unwrap().join())?;
                 to_binder_result(thread_res)?;
-
-
             },
-            State::SHUTTING_DOWN => {
+            State::ShuttingDown => {
                 info!("{:?} is already shutting down", vm_instance.vm_config.name);
-                cb.onShutdownInitiated()?;
+                let _ = cb.onShutdownInitiated();
             },
-            State::STOPPED => {
+            State::Stopped => {
                 info!("{:?} is already stopped", vm_instance.vm_config.name);
-                cb.onStopped()?;
+                let _ = cb.onStopped();
 
             },
-            State::CRASHED => {
+            State::Crashed => {
                 info!("{:?} is crashed, effectively stopped", vm_instance.vm_config.name);
-                cb.onCrashed()?;
+                let _ = cb.onCrashed();
             },
-
         };
-
         Ok(())
     }
-
-
 
     /// The client requested to stop, but the VM is the deciding entity. Needs
     /// either a Mink based or Vsock connection. Will only shutdown once all clients unregister
     /// It is assumed that this client no longer needs the VM. Thus we will remove
     /// it's callback.
     fn request_stop(&self, _arg_callback: &Strong<dyn IVirtualMachineCallback>) -> BinderResult<()>{
+        debug!("requesting VM to stop");
         let cb = _arg_callback.clone();
         let vm_instance_lock = Arc::clone(&self.vm_instance);
-        let mut vm_instance = vm_instance_lock.lock().unwrap();
+        let vm_instance = vm_instance_lock.lock().unwrap();
+        if vm_instance.vm_config.force_stop == true{
+            info!("The {:?} has force_stop enabled, the VM may be killed at any moment. Use force_stop instead.", vm_instance.vm_config.name);
+            let _ = cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP);
+        }
         if vm_instance.find_client(&cb) == false {
             info!("This Client is not registered! Clients need to register with start() first");
-            cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP)?;
+            let _ = cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP);
             return Ok(());
         }
         let state_lock = Arc::clone(&self.main_state);
+        //Creating a scope to determine if Userspace is ready.
+        {
+            let state = state_lock.lock().unwrap();
+            //Wait for userspace to connect first
+            if let State::Started = *state {
+                //The userspace thread needs this lock, drop it so that it can pick it up
+                drop(state);
+                let userspace_ready_thread_lock = Arc::clone(&vm_instance.wait_for_userspace_thread);
+                let mut userspace_ready_thread = userspace_ready_thread_lock.lock().unwrap();
+                //Wait to join the userspace ready thread.
+                if let Some(handle) = userspace_ready_thread.take() {
+                    match handle.join() {
+                        Ok(Ok(())) => info!("Userspace thread joined successfully"),
+                        Ok(Err(e)) => error!("Cannot request to shutdown, the VM Guest Service could not connect {:?} ", e),
+                        Err(e) => {
+                                error!("Cannot request to shutdown, the VM Guest Service could not connect {:?} ", e);
+                                let _ = cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP);
+                                return Ok(());
+                            },
+                        }
+                } else {
+                    warn!("Userspace thread was already taken or never started or exited");
+                }
+            }
+        }
+
         let mut state = state_lock.lock().unwrap();
-        let _ = match *state{
-            State::STARTED => {
-                info!("{:?} is starting, can't shutdown until userspace is ready", vm_instance.vm_config.name);
-                cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP)?;
+        match *state{
+            State::Started => {
+                info!("{:?} is starting then the userspace couldn't connect therefore VM is stuck", vm_instance.vm_config.name);
+                let _ = cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP);
             },
-            State::USERSPACE_READY => {
+            State::UserspaceReady => {
                 info!("{:?} Userspace Ready, request to shutdown -> removing callback ", vm_instance.vm_config.name);
                 let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
                 let mut vm_clients = vm_clients_lock.lock().unwrap();
@@ -808,28 +932,58 @@ impl IVirtualMachine for VirtualMachine{
                         vm_clients.remove(idx);
                 }
 
-                //TODO: Implement request shutdown
                 if vm_clients.len() == 0 {
-                    todo!();
-                }
+                    let guest_client_lock = Arc::clone(&vm_instance.guest_client);
+                    //Safe to assume there is a Guest Service since the userspace
+                    // thread joined successfully.
+                    let guest_client = guest_client_lock.lock().unwrap();
+                    match guest_client.as_ref().unwrap().shutdown() {
+                        Ok(()) => {
+                            info!("{} has started to shutdown",vm_instance.vm_config.name);
+                            *state = State::ShuttingDown;
+                            let _ = cb.onShutdownInitiated();
+                            drop(state);
+                            //drop the clients handle, they will all be removed in the stop thread
+                            drop(vm_clients);
+                            let shutdown_thread_lock = Arc::clone(&vm_instance.wait_for_stop_thread);
+                            let mut shutdown_thread = shutdown_thread_lock.lock().unwrap();
+                            //Wait to join the stop thread.
+                            let thread_res = to_binder_result(shutdown_thread.take().unwrap().join())?;
+                            if let Err(_e) = thread_res{
+                                error!("Failed to request stop for {:?}", vm_instance.vm_config.name);
+                                let mut state = state_lock.lock().unwrap();
+                                *state = State::UserspaceReady;
+                                let _ = cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP);
+                            }
+                            else{
 
+                                let _ = cb.onStopped()?;
+                            }
+                        }
+                        Err(e) => {
+                            error!("{} VM has failed to shutdown: {:?}", vm_instance.vm_config.name, e);
+                            let _ = cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP);
+                            return Ok(());
+                        }
+                    };
+
+                }
             },
-            State::SHUTTING_DOWN => {
+            State::ShuttingDown => {
                 info!("{:?} is already shutting down", vm_instance.vm_config.name);
-                cb.onShutdownInitiated()?;
+                let _ = cb.onShutdownInitiated();
             },
-            State::STOPPED => {
+            State::Stopped => {
                 info!("{:?} has already stopped", vm_instance.vm_config.name);
-                cb.onStopped()?;
+                let _ = cb.onStopped();
             },
-            State::CRASHED => {
+            State::Crashed => {
                 info!("{:?} is crashed, effectively stopped", vm_instance.vm_config.name);
-                cb.onCrashed()?;
+                let _ = cb.onCrashed();
             },
 
         };
 
-        info!("This function is not implemented yet");
         Ok(())
     }
 }
@@ -837,21 +991,19 @@ impl IVirtualMachine for VirtualMachine{
 
 /// Create a VM Info from a VmConfig
 pub fn create_vm_info(vm_config: &VmConfig) -> Result<VmInfo>{
-    let mut vm_infos = Vec::<VmInfo>::new();
-
-        let vm_info = VmInfo{
-            name: vm_config.name.clone(),
-            early_vm: vm_config.early_vm.clone(),
-            enabled: vm_config.enabled.clone(),
-            force_stop: vm_config.force_stop.clone(),
-            num_vcpus: vm_config.num_vcpus.clone().try_into()?,
-            cma_size: vm_config.cma_size.clone().try_into()?,
-            swiotlb_size: vm_config.swiotlb_size.clone().try_into()?,
-            total_memory: vm_config.total_memory.clone().try_into()?,
-            vm_id: vm_config.vm_id.clone().try_into()?,
-            mink_uid: vm_config.mink_uid.clone().try_into()?,
-        };
-        info!("VM Info {:?}", vm_info);
+    let vm_info = VmInfo{
+        name: vm_config.name.clone(),
+        early_vm: vm_config.early_vm.clone(),
+        enabled: vm_config.enabled.clone(),
+        force_stop: vm_config.force_stop.clone(),
+        num_vcpus: vm_config.num_vcpus.clone().try_into()?,
+        cma_size: vm_config.cma_size.clone().try_into()?,
+        swiotlb_size: vm_config.swiotlb_size.clone().try_into()?,
+        total_memory: vm_config.total_memory.clone().try_into()?,
+        vm_id: vm_config.vm_id.clone().try_into()?,
+        mink_uid: vm_config.mink_uid.clone().try_into()?,
+    };
+    debug!("VM Info {:?}", vm_info);
     Ok(vm_info)
 
 }
