@@ -16,6 +16,9 @@ PRODUCT_PACKAGES += qcvm_config.json
 PRODUCT_PACKAGES += vendor.qti.qtvm.proxyclient-service
 PRODUCT_PACKAGES_DEBUG += test_vm_client_rs
 PRODUCT_PACKAGES_DEBUG += test_vm_client_cpp
+PRODUCT_PACKAGES_DEBUG += avf_qcvm_test_client_rs
+PRODUCT_PACKAGES_DEBUG += avf_qcvm_test_client_cpp
+
 PRODUCT_PROPERTY_OVERRIDES += \
      ro.vendor.qtvm.auto.start=trustedvm
 endif
