@@ -30,8 +30,7 @@
                 "enabled": true,
                 "early_vm" : true,
                 "force_stop" : false,
-                "num_vcpus": 4,
-                "vsock_port": 3301
+                "num_vcpus": 4
             }
         ]
     }

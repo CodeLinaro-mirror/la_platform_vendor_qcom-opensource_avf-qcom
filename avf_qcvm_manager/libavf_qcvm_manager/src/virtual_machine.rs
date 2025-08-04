@@ -194,7 +194,7 @@ pub struct VmInstance{
     /** To be deprecated once VmInfo can host all of VmConfig */
     pub vm_config: VmConfig,
     /** Container for AVF pointers */
-    pub avf_handle: AvfHandle,
+    pub avf_handle: Arc<Mutex<AvfHandle>>,
     /** Needs a Mutex since the Clients get impacts on DeathRecipient threads
      * and Stop threads */
     pub vm_clients: Arc<Mutex<Vec<VmClient>>>,
@@ -218,7 +218,7 @@ impl VmInstance {
     pub fn start_vm(&mut self) -> Result<()>{
 
         {
-            let virtmgr_service_lock = Arc::clone(&self.avf_handle.virtmgr_service);
+            let virtmgr_service_lock = Arc::clone(&self.avf_handle.lock().unwrap().virtmgr_service);
             let virtmgr = virtmgr_service_lock.lock().unwrap();
             match virtmgr.0 {
                 Some(service) => {
@@ -238,13 +238,13 @@ impl VmInstance {
         // Set up the AVF Config -> this object dies when the VM dies
         self.create_avf_config()?;
 
-        let virtmgr_service_lock = Arc::clone(&self.avf_handle.virtmgr_service);
+        let virtmgr_service_lock = Arc::clone(&self.avf_handle.lock().unwrap().virtmgr_service);
         let virtmgr = virtmgr_service_lock.lock().unwrap();
         let mut vm = std::ptr::null_mut();
         let res = unsafe {
             // Create an AVF Virtual Machine object
             AVirtualMachine_createRaw(
-                virtmgr.0.unwrap(), self.avf_handle.avf_config.unwrap(), -1, // console_in
+                virtmgr.0.unwrap(), self.avf_handle.lock().unwrap().avf_config.unwrap(), -1, // console_in
                 -1, // console_out
                 -1, // log
                 &mut vm,
@@ -263,7 +263,7 @@ impl VmInstance {
         }
         info!("Crosvm Launched!");
 
-        self.avf_handle.avf_vm_handle = Arc::new(Mutex::new(AVirtualMachineWrapper(Some(vm))));
+        self.avf_handle.lock().unwrap().avf_vm_handle = Arc::new(Mutex::new(AVirtualMachineWrapper(Some(vm))));
 
         // Start the wait for userspace thread
         self.wait_for_userspace()?;
@@ -302,7 +302,7 @@ impl VmInstance {
             info!("Virtmgr started! {:?}", service);
         }
 
-        self.avf_handle.virtmgr_service = Arc::new(Mutex::new(AVirtmgrWrapper(Some(service))));
+        self.avf_handle.lock().unwrap().virtmgr_service = Arc::new(Mutex::new(AVirtmgrWrapper(Some(service))));
         Ok(())
     }
 
@@ -427,7 +427,7 @@ impl VmInstance {
             AVirtualMachineRawConfig_setDeviceTreeOverlay(config, self.vm_dtbo_fd.clone().unwrap());
         }
 
-        self.avf_handle.avf_config = Some(config);
+        self.avf_handle.lock().unwrap().avf_config = Some(config);
         Ok(())
 
     }
@@ -515,6 +515,10 @@ impl VmInstance {
         let userspace_timer = self.vm_config.userspace_timer.clone();
         let mink_uid = self.vm_config.mink_uid.clone();
         let vsock_port = self.vm_config.vsock_port.clone();
+        if mink_uid == 0 && vsock_port == 0 {
+            warn!("mink_uid and vsock_port are both not set in config, will not set userspace_ready and keep state as started and don't support request stop");
+            return Ok(());
+        }
         let strong_state = Weak::upgrade(&self.state);
         let vm_clients_lock = Arc::clone(&self.vm_clients);
         let guest_client_lock = Arc::clone(&self.guest_client);
@@ -555,8 +559,8 @@ impl VmInstance {
     /// asynchronously. It will also notify all the clients about whether it stopped
     /// via a Crash or not.
     pub fn wait_for_stop(&mut self) -> Result<()>{
-        let vm_lock = Arc::clone(&self.avf_handle.avf_vm_handle);
-        let virtmgr_service_lock = Arc::clone(&self.avf_handle.virtmgr_service);
+        let vm_lock = Arc::clone(&self.avf_handle.lock().unwrap().avf_vm_handle);
+        let virtmgr_service_lock = Arc::clone(&self.avf_handle.lock().unwrap().virtmgr_service);
         let vm_name = self.vm_config.name.clone();
         let strong_state = Weak::upgrade(&self.state);
         let vm_clients_lock = Arc::clone(&self.vm_clients);
@@ -657,8 +661,9 @@ impl VirtualMachine{
         let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
         let guest_client_lock = Arc::clone(&vm_instance.guest_client);
         let state_lock = Arc::clone(&self.main_state);
-        // let shutdown_thread_lock = Arc::clone(&vm_instance.wait_for_stop_thread);
         let userspace_ready_thread_lock = Arc::clone(&vm_instance.wait_for_userspace_thread);
+        let unsupported_request = vm_instance.vm_config.vsock_port == 0 && vm_instance.vm_config.mink_uid == 0;
+        let avf_handle_lock = Arc::clone(&vm_instance.avf_handle);
         let mut death_recipient = DeathRecipient::new(move ||{
                 info!("Received a death recipient");
                 let mut vm_clients = vm_clients_lock.lock().unwrap();
@@ -678,40 +683,47 @@ impl VirtualMachine{
                 // Final option, there is something that is taking and joining the thread
                 // in between the calls.
                 if vm_clients.len() == 0 {
-                    info!("All Clients for {:?} has disconnected, will try to request shutdown", vm_name);
-                    //drop the clients handle,
-                    drop(vm_clients);
+                    if unsupported_request {
+                        info!("All Clients for {:?} has disconnected, but unsupport request stop, force stop now", vm_name);
+                        let wrapper = avf_handle_lock.lock().unwrap();
+                        let vm = wrapper.avf_vm_handle.lock().unwrap().0.unwrap().clone();
+                        //Removes the virtmgr instance and the VM to clean up
+                        unsafe{AVirtualMachine_stop(vm);}
+                    } else {
+                        info!("All Clients for {:?} has disconnected, will try to request shutdown", vm_name);
+                        //drop the clients handle,
+                        drop(vm_clients);
 
-                    {
-                        let state = state_lock.lock().unwrap();
-                        //Wait for userspace to connect first
-                        if let State::Started = *state {
-                            //The userspace thread needs this lock, drop it so that it can pick it up
-                            drop(state);
-                            let mut userspace_ready_thread = userspace_ready_thread_lock.lock().unwrap();
-                            info!("Wait till userspace connects before shutting down");
-                            //Wait to join the userspace ready thread.
-                            if let Some(handle) = userspace_ready_thread.take() {
-                                match handle.join() {
-                                    Ok(Ok(())) => info!("Userspace thread joined successfully"),
-                                    Ok(Err(e)) => error!("Cannot request to shutdown, the VM Guest Service could not connect {:?} ", e),
-                                    Err(e) => error!("Failed to join userspace thread: {:?}", e),
-                                    }
-                            } else {
-                                warn!("Userspace thread was already taken or joined alrady");
+                        {
+                            let state = state_lock.lock().unwrap();
+                            //Wait for userspace to connect first
+                            if let State::Started = *state {
+                                //The userspace thread needs this lock, drop it so that it can pick it up
+                                drop(state);
+                                let mut userspace_ready_thread = userspace_ready_thread_lock.lock().unwrap();
+                                info!("Wait till userspace connects before shutting down");
+                                //Wait to join the userspace ready thread.
+                                if let Some(handle) = userspace_ready_thread.take() {
+                                    match handle.join() {
+                                        Ok(Ok(())) => info!("Userspace thread joined successfully"),
+                                        Ok(Err(e)) => error!("Cannot request to shutdown, the VM Guest Service could not connect {:?} ", e),
+                                        Err(e) => error!("Failed to join userspace thread: {:?}", e),
+                                        }
+                                } else {
+                                    warn!("Userspace thread was already taken or joined alrady");
+                                }
                             }
                         }
+                        let mut state = state_lock.lock().unwrap();
+                        info!("Calling shutdown on the Guest Agent");
+                        let guest_client = guest_client_lock.lock().unwrap();
+                        if let State::UserspaceReady = *state {
+                            // There are no clients connected,
+                            // no need to check when the shutdown thread joins
+                            let _ = guest_client.as_ref().unwrap().shutdown();
+                            *state = State::ShuttingDown;
+                        }
                     }
-                    let mut state = state_lock.lock().unwrap();
-                    info!("Calling shutdown on the Guest Agent");
-                    let guest_client = guest_client_lock.lock().unwrap();
-                    if let State::UserspaceReady = *state {
-                        // There are no clients connected,
-                        // no need to check when the shutdown thread joins
-                        let _ = guest_client.as_ref().unwrap().shutdown();
-                        *state = State::ShuttingDown;
-                    }
-
                 }
             });
         let mut cb_binder = cb.as_binder();
@@ -839,7 +851,7 @@ impl IVirtualMachine for VirtualMachine{
                 to_binder_result(VmInstance::notify_clients(&*vm_clients, state.clone()))?;
                 //Don't want to hold this mutex, stop thread will need need it
                 drop(vm_clients);
-                let wrapper = Arc::clone(&vm_instance.avf_handle.avf_vm_handle);
+                let wrapper = Arc::clone(&vm_instance.avf_handle.lock().unwrap().avf_vm_handle);
                 let vm = wrapper.lock().unwrap().0.unwrap().clone();
                 //Removes the virtmgr instance and the VM to clean up
                 unsafe{AVirtualMachine_stop(vm);}
@@ -880,9 +892,10 @@ impl IVirtualMachine for VirtualMachine{
         let cb = _arg_callback.clone();
         let vm_instance_lock = Arc::clone(&self.vm_instance);
         let vm_instance = vm_instance_lock.lock().unwrap();
-        if vm_instance.vm_config.force_stop == true{
-            info!("The {:?} has force_stop enabled, the VM may be killed at any moment. Use force_stop instead.", vm_instance.vm_config.name);
+        if vm_instance.vm_config.vsock_port == 0 && vm_instance.vm_config.mink_uid == 0 {
+            info!("mink_uid and vsock_port are both not set, unsupport request stop");
             let _ = cb.onError(VirtualMachineError::FAILED_TO_REQUEST_STOP);
+            return Ok(());
         }
         if vm_instance.find_client(&cb) == false {
             info!("This Client is not registered! Clients need to register with start() first");
