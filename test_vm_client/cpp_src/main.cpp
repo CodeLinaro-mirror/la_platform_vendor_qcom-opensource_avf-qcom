@@ -15,7 +15,8 @@
 
 using namespace aidl::vendor::qti::AvfQcvmManager;
 
-int main() {
+int main(int argc, char* argv[]) {
+    bool oneshot = false;
 
     std::string name =
         std::string(IAvfQcvmManager::descriptor)
@@ -34,12 +35,22 @@ int main() {
     std::shared_ptr<IVirtualMachineCallback> vm_callback = ndk::SharedRefBase::make<VirtualMachineCallback>();
     std::cout << "Starting TUI VM" << std::endl;
     vm->start(vm_callback);
-    std::cout << "Sleeping for 5 seconds..." << std::endl;
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-    std::cout << "Awake now!" << std::endl;
-    ALOGI("test_vm_client: Requesting the VM to shutdown");
-    std::cout << "Calling to request stop" << std::endl;
-    vm->request_stop(vm_callback);
+
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--oneshot") {
+            oneshot = true;
+            break;
+        }
+    }
+
+    if (!oneshot) {
+        std::cout << "Sleeping for 5 seconds..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        std::cout << "Awake now!" << std::endl;
+        ALOGI("test_vm_client: Requesting the VM to shutdown");
+        std::cout << "Calling to request stop" << std::endl;
+        vm->request_stop(vm_callback);
+    }
 
     ABinderProcess_joinThreadPool();
 
