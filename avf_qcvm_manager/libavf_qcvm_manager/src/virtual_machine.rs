@@ -20,7 +20,7 @@ use std::fs::{File, OpenOptions, remove_file};
 use std::os::fd::IntoRawFd;
 use std::os::unix::io::{RawFd};
 
-use avf_bindgen::{AVirtualMachine_createRaw,
+use qcomvendor_libavf_bindgen::{AVirtualMachine_createRaw,
     AVirtualMachineRawConfig_setHypervisorSpecificAuthMethod, AVirtualMachineRawConfig_setInstanceId,
     AVirtualMachineRawConfig_setVCpuCount, AVirtualMachineRawConfig_setSwiotlbMiB,
     AVirtualMachineRawConfig_addDisk, AVirtualMachineRawConfig_setMemoryMiB,
