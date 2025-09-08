@@ -204,14 +204,11 @@ impl StateMachine {
                 }
                 Ok(2) => {
                     if let Some(vm) = self.vms.last() {
-                        if matches!(*vm.vm_state.lock().unwrap(), VmState::Started)
-                            || matches!(*vm.vm_state.lock().unwrap(), VmState::UserspaceReady) {
-                                println!("VM already started.");
-                        } else if vm.vm.start(&vm.vm_callback).is_ok() {
+                        if vm.vm.start(&vm.vm_callback).is_ok() {
                             println!("Triggered VM: '{}' start", vm.name);
-                            } else {
-                                println!("Failed to trigger VM start.");
-                            }
+                        } else {
+                            println!("Failed to trigger VM start.");
+                        }
                     }
                 }
                 Ok(3) => {
