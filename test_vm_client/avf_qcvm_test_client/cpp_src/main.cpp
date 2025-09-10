@@ -117,15 +117,11 @@ public:
                 }
                 case 2:
                     if (vm_) {
-                        if (*vm_state_ == VmState::Started || *vm_state_ == VmState::UserspaceReady) {
-                            std::cout << "VM already started." << std::endl;
+                        auto status = vm_->start(vm_callback_);
+                        if (status.isOk()) {
+                            std::cout << "Triggered VM: "<< vm_name_ <<" start"<<endl;
                         } else {
-                            auto status = vm_->start(vm_callback_);
-                            if (status.isOk()) {
-                                std::cout << "Triggered VM: "<< vm_name_ <<" start"<<endl;
-                            } else {
-                                std::cout << "Failed to start VM: " << status.getDescription() << std::endl;
-                            }
+                          std::cout << "Failed to start VM: " << status.getDescription() << std::endl;
                         }
                     }
                     break;
