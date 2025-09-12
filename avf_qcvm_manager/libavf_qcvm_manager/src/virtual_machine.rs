@@ -523,7 +523,7 @@ impl VmInstance {
         let vm_clients_lock = Arc::clone(&self.vm_clients);
         let guest_client_lock = Arc::clone(&self.guest_client);
         let thread = thread::spawn(move|| -> Result<()>{
-            debug!("Entered Wait for Userspace Thread for {:?}", vm_name);
+            info!("Entered Wait for Userspace Thread for {:?}, mink_uid:{}, vsock_port:{}", vm_name, mink_uid, vsock_port);
             //By default userspace ready is being determined by vsock
             let mut service_id = ServiceId::VsockPort(vsock_port);
             if mink_uid != 0 {
@@ -784,16 +784,19 @@ impl IVirtualMachine for VirtualMachine{
                     cb.onCrashed()?;
                     info!("{:?} VM has crashed but will try to start the VM",vm_instance.vm_config.name);
                     match vm_instance.start_vm(){
-                        Ok(()) => info!("{:?} VM is starting!", vm_instance.vm_config.name),
+                        Ok(()) => {
+                            info!("{:?} VM is starting!", vm_instance.vm_config.name);
+                            *state = State::Started;
+                            let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
+                            let vm_clients= vm_clients_lock.lock().unwrap();
+                            to_binder_result(VmInstance::notify_clients(&*vm_clients,state.clone()))?;
+                        }
                         Err(e) => {
                             error!("{:?} VM failed to start, reason: {:?}", vm_instance.vm_config.name, e);
                             let _ = cb.onError(VirtualMachineError::FAILED_START);
+                            return Ok(());
                         }
                     };
-                    *state = State::Started;
-                    let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
-                    let vm_clients= vm_clients_lock.lock().unwrap();
-                    to_binder_result(VmInstance::notify_clients(&*vm_clients,state.clone()))?;
 
                 },
                 //This shouldn't be hit, but in case, the client should wait until they received an onStopped()
@@ -807,16 +810,19 @@ impl IVirtualMachine for VirtualMachine{
                 State::Stopped => {
                     info!("VM was stopped, needs to start");
                     match vm_instance.start_vm(){
-                        Ok(()) => info!("{:?} VM is starting!", vm_instance.vm_config.name),
+                        Ok(()) => {
+                            info!("{:?} VM is starting!", vm_instance.vm_config.name);
+                            *state = State::Started;
+                            let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
+                            let vm_clients= vm_clients_lock.lock().unwrap();
+                            to_binder_result(VmInstance::notify_clients(&*vm_clients,state.clone()))?;
+                        }
                         Err(e) => {
                             error!("{:?} VM failed to start, reason: {:?}", vm_instance.vm_config.name, e);
                             let _ = cb.onError(VirtualMachineError::FAILED_START);
+                            return Ok(());
                         }
                     };
-                    *state = State::Started;
-                    let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
-                    let vm_clients= vm_clients_lock.lock().unwrap();
-                    to_binder_result(VmInstance::notify_clients(&*vm_clients,state.clone()))?;
                 },
             };
         info!("state has been dropped");
