@@ -20,4 +20,10 @@ rust_library {
     shared_libs: ["libavf"],
     vendor: true,
     prefer_rlib: true,
+
+    enabled: select(soong_config_variable("qti_fwk_valueadds", "fwk_supports_full_valueadds"), {
+        "disabled": false,
+        default: true,
+    }),
+
 }
