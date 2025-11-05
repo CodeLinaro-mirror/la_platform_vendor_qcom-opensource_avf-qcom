@@ -7,7 +7,7 @@ mod proxyclient_service;
 use crate::proxyclient_service::ProxyClientService;
 use log::LevelFilter;
 use std::env;
-#[allow(unused_variables)]
+
 fn main() {
     binder::ProcessState::start_thread_pool();
     let args: Vec<String> = env::args().collect();
@@ -23,5 +23,5 @@ fn main() {
             .with_max_level(log_level),
     );
 
-    let virt_service = ProxyClientService::proxyclient_service();
+    let _virt_service = ProxyClientService::proxyclient_service();
 }
