@@ -551,7 +551,8 @@ impl VmInstance {
             }
             return Err(anyhow!("State object has died"));
         });
-        self.wait_for_userspace_thread = Arc::new(Mutex::new(Some(thread)));
+        let mut userspace_thread = self.wait_for_userspace_thread.lock().unwrap();
+        *userspace_thread = Some(thread);
         Ok(())
     }
 
@@ -715,9 +716,9 @@ impl VirtualMachine{
                             }
                         }
                         let mut state = state_lock.lock().unwrap();
-                        info!("Calling shutdown on the Guest Agent");
                         let guest_client = guest_client_lock.lock().unwrap();
                         if let State::UserspaceReady = *state {
+                            info!("Calling shutdown on the Guest Agent");
                             // There are no clients connected,
                             // no need to check when the shutdown thread joins
                             let _ = guest_client.as_ref().unwrap().shutdown();
