@@ -17,7 +17,7 @@ use std::path::{PathBuf};
 
 pub const DT_TABLE_MAGIC: u32 = 0xd7b7ab1e;
 /// Directory in which to write disk image files used while running VMs.
-pub const TEMPORARY_DIRECTORY: &str = "/data/vendor/qtvm_dtbo";
+pub const TEMPORARY_DIRECTORY: &str = "/mnt/vendor/qtvm_dtbo";
 
 
 pub fn get_or_create_common_dir() -> Result<PathBuf> {

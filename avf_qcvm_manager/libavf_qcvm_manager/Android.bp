@@ -1,10 +1,18 @@
+rust_bindgen {
+    name: "libqcomvendor_libavf_bindgen",
+    wrapper_src: "wrapper.h",
+    crate_name: "qcomvendor_libavf_bindgen",
+    source_stem: "bindings",
+    bindgen_flags: ["--default-enum-style rust"],
+    shared_libs: ["libavf"],
+    vendor_available: true,
+}
 rust_library {
     name: "libavf_qcvm_manager",
     srcs: ["src/lib.rs"],
     crate_name: "avf_qcvm_manager",
     rustlibs: [
         "vendor.qti.AvfQcvmManager-V1-rust",
-        "libavf_bindgen",
         "libbinder_rs",
         "liblog_rust",
         "libserde_json",
@@ -16,8 +24,14 @@ rust_library {
         "libzerocopy",
         "libnix",
         "libguest_agent_client",
+        "libqcomvendor_libavf_bindgen",
     ],
-    shared_libs: ["libavf"],
     vendor: true,
     prefer_rlib: true,
+
+    enabled: select(soong_config_variable("qti_fwk_valueadds", "fwk_supports_full_valueadds"), {
+        "disabled": false,
+        default: true,
+    }),
+
 }

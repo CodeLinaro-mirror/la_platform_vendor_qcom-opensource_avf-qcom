@@ -21,7 +21,7 @@ pub enum ServiceId{
 pub trait GuestAgentClient{
     /// Guest Agents should notify when userspace is up and ready
     /// There is a timeout and retries for connecting to userspace
-    fn connect_userspace(retry:u32, timeout: u32, service_id: ServiceId) -> Result<Self>
+    fn connect_userspace(retry:u32, vm_userspace_start_timer: u32, timeout: u32, service_id: ServiceId) -> Result<Self>
          where Self: std::marker::Sized;
 
     /// Every Guest Agent needs to be able to shutdown their VM

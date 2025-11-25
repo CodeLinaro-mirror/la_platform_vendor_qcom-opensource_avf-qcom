@@ -12,9 +12,9 @@ pub struct GuestClient {
 unsafe impl Send for GuestClient{}
 
 impl GuestAgentClient for GuestClient {
-    fn connect_userspace(retry: u32, timeout: u32, service_id: ServiceId) -> Result<Self> {
+    fn connect_userspace(retry: u32, start_vm_timer: u32, timeout: u32, service_id: ServiceId) -> Result<Self> {
         if let ServiceId::VsockPort(_) = service_id {
-            let vsock_client = match VsockClient::connect_userspace(retry, timeout, service_id) {
+            let vsock_client = match VsockClient::connect_userspace(retry, start_vm_timer, timeout, service_id) {
                 Ok(client) => Box::new(client),
                 Err(e) => {
                     return Err(anyhow!("{:?}", e));
@@ -25,7 +25,7 @@ impl GuestAgentClient for GuestClient {
             });
         }
         else{
-            let mink_client = match MinkClient::connect_userspace(retry, timeout, service_id) {
+            let mink_client = match MinkClient::connect_userspace(retry, start_vm_timer, timeout, service_id) {
                 Ok(client) => Box::new(client),
                 Err(e) => {
                     return Err(anyhow!("{:?}", e));
