@@ -25,12 +25,17 @@ impl GuestAgentClient for MinkClient{
     /// The connect call is a blocking call. Once it has connected
     /// we can safely assume the userspace is up.
     /// Return a handle to the mink service.
-    fn connect_userspace(retry:u32, timeout: u32, service_id: ServiceId) -> Result<Self>{
+    fn connect_userspace(retry:u32, vm_userspace_start_timer: u32, userspace_timer: u32, service_id: ServiceId) -> Result<Self>{
         let mut mink_uid = 0;
         if let MinkUid(uid) = service_id {
             mink_uid = uid;
         }
         let mut attempts = 0;
+
+        if vm_userspace_start_timer > 0
+        {
+            thread::sleep(Duration::from_millis(vm_userspace_start_timer.into()));
+        }
         //Connect to the service socket
         info!("Connecting to HLOS Mink Opener");
         // ToDo: Needs to catch err if the VM is not up!!
@@ -56,10 +61,7 @@ impl GuestAgentClient for MinkClient{
                 Err(e) => {
                     error!("IOpener failed to open the service {:?}", e);
                     attempts += 1;
-                    thread::sleep(Duration::new(
-                                timeout.into(),
-                                0,
-                            ));
+                    thread::sleep(Duration::from_millis(userspace_timer.into()));
                     continue;
                 }
             };
