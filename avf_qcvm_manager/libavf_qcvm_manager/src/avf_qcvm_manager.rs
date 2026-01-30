@@ -130,9 +130,9 @@ pub fn parse_vm_config_json() -> Result<Vec<VmConfig>>{
     let mut vm_configs = Vec::<VmConfig>::new();
 
     // Uses serde_json to deserialize directly into strongly typed VmConfig object.
-    println!("VM config path {:?}", VM_CONFIG_PATH);
+    info!("VM config path {:?}", VM_CONFIG_PATH);
     let config_file = File::open(VM_CONFIG_PATH)?;
-    println!("Config File opened successfully");
+    info!("Config File opened successfully");
     let root: Value = match serde_json::from_reader(config_file){
         Ok(parsed) => parsed,
         Err(e) => {
@@ -140,7 +140,7 @@ pub fn parse_vm_config_json() -> Result<Vec<VmConfig>>{
                 return Err(e.into());
             }
     };
-    println!("Json has been parsed");
+    info!("Json has been parsed");
     let json_config_array: &Vec<Value> = to_binder_result(root
         .get("qcvm_config")
         .and_then(|mgr| mgr.get("vm_configs"))
