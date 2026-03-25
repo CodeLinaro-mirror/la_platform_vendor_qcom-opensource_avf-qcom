@@ -30,7 +30,8 @@
                 "enabled": true,
                 "early_vm" : true,
                 "force_stop" : false,
-                "num_vcpus": 4
+                "num_vcpus": 4,
+                "mink_uid": 809
             }
         ]
     }
