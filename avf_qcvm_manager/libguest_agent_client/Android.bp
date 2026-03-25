@@ -9,6 +9,7 @@ rust_library_rlib {
         "libmink_rs",
         "liblog_rust",
         "libserde",
+        "libserde_json",
         "libciborium",
         "libanyhow",
         "libnix"
