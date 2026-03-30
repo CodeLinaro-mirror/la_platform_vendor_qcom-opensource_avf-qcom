@@ -12,7 +12,7 @@ use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 use vsock::{VsockListener, VsockStream, VMADDR_CID_HOST};
 use crate::{GuestAgentClient, ServiceId, ServiceId::VsockPort};
-
+use std::thread;
 
 const WRITE_BUFFER_CAPACITY: usize = 1024;
 
@@ -41,8 +41,12 @@ impl GuestAgentClient for VsockClient {
     /// The connect call is a blocking call. Once it has connected
     /// we can safely assume the userspace is up.
     /// Return a handle to the vsock service.
-    fn connect_userspace(_retry:u32, timeout: u32, service_id: ServiceId) -> Result<Self> {
+    fn connect_userspace(_retry:u32, vm_userspace_start_timer: u32, timeout: u32, service_id: ServiceId) -> Result<Self> {
         let mut port = 0;
+        if vm_userspace_start_timer > 0
+        {
+            thread::sleep(Duration::from_millis(vm_userspace_start_timer.into()));
+        }
         if let VsockPort(vsock_port) = service_id {
             port = vsock_port;
         }

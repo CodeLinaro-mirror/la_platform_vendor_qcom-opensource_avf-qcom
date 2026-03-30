@@ -3,22 +3,17 @@
  * SPDX-License-Identifier: BSD-3-Clause-Clear
 */
 
-#![allow(dead_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-use log::{debug, error, info};
+use log::{error, info};
 use rustutils::system_properties;
 use std::{
-    collections::HashMap,
-    error::Error,
-    fs::File,
-    sync::{Arc, Mutex},
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex, LazyLock},
     thread,
     time::Duration,
 };
 
 use binder ::{
-    BinderFeatures, IBinder, Interface, Strong, Result
+    BinderFeatures, Interface, Result
 };
 use libc::{_exit};
 use serde::Deserialize;
@@ -30,8 +25,8 @@ static DEFAULT_BOOT_COMPLETE_TIMEOUT: u16 = 60;
 
 use vendor_qti_AvfQcvmManager::aidl::vendor::qti::AvfQcvmManager::{
     IAvfQcvmManager::{
-        BnAvfQcvmManager, IAvfQcvmManager, BpAvfQcvmManager
-        }, VmInfo::VmInfo, IVirtualMachine::IVirtualMachine,
+            IAvfQcvmManager, BpAvfQcvmManager
+        }, IVirtualMachine::IVirtualMachine,
     IVirtualMachineCallback::{
         IVirtualMachineCallback, BnVirtualMachineCallback},
     VirtualMachineError::VirtualMachineError,
@@ -45,20 +40,38 @@ pub struct VmParameters {
     pub no_fs_dependency: bool,
 }
 
-type VmInstanceMap = Arc<Mutex<HashMap<String, binder::Strong<dyn IVirtualMachine>>>>;
-
-struct VirtualMachineCallback {
-    name: String, // Store VM name
+ #[derive(Clone)]
+struct VirtualMachine {
+    // Store VM name
+    name: String,
+    // VM handle to request start/stop
+    vm: binder::Strong<dyn IVirtualMachine>,
+    // Callback object to get VM state updates
+    vm_callback: Option<binder::Strong<dyn IVirtualMachineCallback>>,
 }
-impl Interface for VirtualMachineCallback {}
-impl VirtualMachineCallback {
-    pub fn to_binder(self) -> Strong<dyn IVirtualMachineCallback> {
-        BnVirtualMachineCallback::new_binder(self, BinderFeatures::default())
+impl Interface for VirtualMachine {}
+impl VirtualMachine {
+    pub fn new(name: String, vm: binder::Strong<dyn IVirtualMachine>) -> VirtualMachine {
+        let new_virtual_machine = VirtualMachine {
+                                        name: name,
+                                        vm: vm,
+                                        vm_callback: None,
+                                    };
+        let new_callback_binder = BnVirtualMachineCallback::new_binder(new_virtual_machine.clone(), BinderFeatures::default());
+
+        VirtualMachine {
+            vm_callback: Some(new_callback_binder),
+            ..new_virtual_machine
+        }
     }
 }
-impl IVirtualMachineCallback for VirtualMachineCallback {
+
+static RUNNING_VMS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+impl IVirtualMachineCallback for VirtualMachine {
     fn onStarting(&self)  -> Result<()> {
         info!("VM '{}' is starting..!", self.name);
+        RUNNING_VMS.lock().unwrap().insert(self.name.clone());
         Ok(())
     }
 
@@ -69,16 +82,30 @@ impl IVirtualMachineCallback for VirtualMachineCallback {
 
     fn onStopped(&self) -> Result<()> {
         info!("VM '{}' has stopped..!", self.name);
+        let mut running_vms = RUNNING_VMS.lock().unwrap();
+        running_vms.remove(&self.name);
+        if running_vms.is_empty() {
+            // Exit the program when all running VMs have stopped
+            info!("All VMs have stopped, exit proxy client");
+            std::process::exit(1);
+        };
         Ok(())
     }
 
     fn onShutdownInitiated(&self) -> Result<()> {
         info!("VM '{}' shutdown has been initiated..!", self.name);
-         Ok(())
+        Ok(())
     }
 
     fn onCrashed(&self) -> Result<()> {
         info!("VM '{}' has crashed..!", self.name);
+        let mut running_vms = RUNNING_VMS.lock().unwrap();
+        running_vms.remove(&self.name);
+        if running_vms.is_empty() {
+            // Exit the program when all running VMs have stopped
+            info!("All VMs have stopped, exit proxy client");
+            std::process::exit(1);
+        };
         Ok(())
     }
 
@@ -88,15 +115,16 @@ impl IVirtualMachineCallback for VirtualMachineCallback {
     }
 }
 
+type VmInstanceMap = Arc<Mutex<HashMap<String, VirtualMachine>>>;
+
 pub struct ProxyClientService {
-    vm_instance_map: VmInstanceMap,
 }
 impl ProxyClientService {
     pub fn proxyclient_service() -> Self {
 
         let autostart_vm_names = Self::read_autostart_vm_names();
         // Initialize the map
-        let mut vm_instance_map_local: HashMap<String, binder::Strong<dyn IVirtualMachine>> =
+        let mut vm_instance_map_local: HashMap<String, VirtualMachine> =
                 HashMap::new();
 
         // Connect to the AvfQcvmManager Service
@@ -129,10 +157,11 @@ impl ProxyClientService {
                                         // vm_info.name, vm_info.vm_id);
                             // }
 
+                            // Create a new virtual_machine instance containing IVirtualMachine binder object
+                            // Callback object will be created in the constructor
+                            let virtual_machine = VirtualMachine::new(vm_param.name.clone(), vm_instance.clone());
                             // Add the instance to the map
-                            vm_instance_map_local.insert(vm_param.name.clone(), vm_instance.clone());
-
-                            let callback = VirtualMachineCallback { name: vm_param.name.clone()};
+                            vm_instance_map_local.insert(vm_param.name.clone(), virtual_machine.clone());
 
                             // Spawn a thread to handle the VM instance
                             let vm_name = vm_param.name.clone();
@@ -141,7 +170,7 @@ impl ProxyClientService {
                                 if no_fs_dependency {
                                     info!("no_fs_dependency for VM, Calling start:{}",vm_name);
                                     // Call the start API
-                                    let result = vm_instance.start(&callback.to_binder());
+                                    let result = vm_instance.start(&virtual_machine.vm_callback.unwrap());
                                     match result {
                                         Ok(_) => info!("VM '{}' start call successful!", vm_name),
                                         Err(e) => error!("Failed to start VM '{}': {:?}",
@@ -161,7 +190,7 @@ impl ProxyClientService {
                                         info!("System boot completed.");
                                         info!("Calling start for VM:{}",vm_name);
                                         // Call the start API
-                                        let result = vm_instance.start(&callback.to_binder());
+                                        let result = vm_instance.start(&virtual_machine.vm_callback.unwrap());
                                         match result {
                                             Ok(_) => info!("VM '{}' start call successful!",
                                                     vm_name),
@@ -188,9 +217,7 @@ impl ProxyClientService {
 
             let instance_map = Arc::new(Mutex::new(vm_instance_map_local));
             Self::property_monitor(VM_STOP_PROP.to_string(), instance_map.clone());
-            return Self {
-                vm_instance_map: instance_map,
-            };
+            return Self {};
         } else {
             error!("Failed to parse VM configuration file.");
             unsafe { _exit(1); }
@@ -208,7 +235,10 @@ impl ProxyClientService {
             match property_value {
                 Some(ref value) => {
                     info!("Autostart System property value: {}", value);
-
+                    if value.is_empty() {
+                        error!("Autostart System property is empty.");
+                        std::process::exit(1);
+                    }
                     // Split the property value by `:` and store VM names in a vector
                     for vm_name in value.split(':') {
                         let vm_name = vm_name.trim();
@@ -300,19 +330,20 @@ impl ProxyClientService {
                             info!("Performing stop operation for VM '{}'", vm_name);
 
                             // Call the stop API and remove the binder instance from map upon success.
+                            let result = binder_instance.vm.request_stop(&binder_instance.vm_callback.unwrap());
 
-                            // Simulate stop operation timing with sleep
-                            let sleep_duration = std::time::Duration::from_secs(10);
-                            std::thread::sleep(sleep_duration);
-
-                            // Upon success, Lock again to safely remove the entry from instance map
-                            let mut map_lock = map_clone.lock().unwrap();
-                            if map_lock.remove(&vm_name).is_some() {
-                                info!("VM '{}' removed from instance map.", vm_name);
-                            } else {
-                                error!("VM '{}' was not found during removal.", vm_name);
+                            if result.is_ok() {
+                                // Upon success, Lock again to safely remove the entry from instance map
+                                let mut map_lock = map_clone.lock().unwrap();
+                                if map_lock.remove(&vm_name).is_some() {
+                                    info!("VM '{}' removed from instance map.", vm_name);
+                                } else {
+                                    error!("VM '{}' was not found during removal.", vm_name);
+                                }
                             }
-
+                            else {
+                                error!("Proxy client couldn't request_stop for VM '{}', keep VM in map", vm_name);
+                            }
                         } else {
                             error!("VM '{}' not found in instance map.", vm_name);
                         }
@@ -360,17 +391,19 @@ impl ProxyClientService {
                             info!("Performing stop operation for VM '{}'", vm_name);
 
                             // Call the stop API and remove the binder instance from map upon success.
+                            let result = binder_instance.vm.request_stop(&binder_instance.vm_callback.unwrap());
 
-                            // Simulate stop operation timing with sleep
-                            let sleep_duration = std::time::Duration::from_secs(10);
-                            std::thread::sleep(sleep_duration);
-
-                            // Upon success, Lock again to safely remove the entry from instance map
-                            let mut map_lock = map_clone.lock().unwrap();
-                            if map_lock.remove(&vm_name).is_some() {
-                                info!("VM '{}' removed from instance map.", vm_name);
-                            } else {
-                                error!("VM '{}' was not found during removal.", vm_name);
+                            if result.is_ok() {
+                                // Upon success, Lock again to safely remove the entry from instance map
+                                let mut map_lock = map_clone.lock().unwrap();
+                                if map_lock.remove(&vm_name).is_some() {
+                                    info!("VM '{}' removed from instance map.", vm_name);
+                                } else {
+                                    error!("VM '{}' was not found during removal.", vm_name);
+                                }
+                            }
+                            else {
+                                error!("Proxy client couldn't request_stop for VM '{}', keep VM in map", vm_name);
                             }
 
                         } else {

@@ -3,17 +3,16 @@
  * SPDX-License-Identifier: BSD-3-Clause-Clear
  */
 
-#![allow(unused_imports)]
 #![allow(clippy::empty_loop)]
 use binder::{
-    BinderFeatures, DeathRecipient, IBinder, Interface, Strong, Result
+    BinderFeatures, Interface, Strong, Result
 };
 use log::LevelFilter;
 
 use vendor_qti_AvfQcvmManager::aidl::vendor::qti::AvfQcvmManager::{
     IAvfQcvmManager::{
-        BnAvfQcvmManager, IAvfQcvmManager, BpAvfQcvmManager
-    }, VmInfo::VmInfo, IVirtualMachine::IVirtualMachine,
+        IAvfQcvmManager, BpAvfQcvmManager
+    },
     IVirtualMachineCallback::{
         IVirtualMachineCallback, BnVirtualMachineCallback},
     VirtualMachineError::VirtualMachineError,
