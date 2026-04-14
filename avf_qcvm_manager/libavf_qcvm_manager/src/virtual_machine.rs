@@ -5,7 +5,11 @@ use binder::{
     BinderFeatures, Strong, Result as BinderResult, Interface,
     DeathRecipient, IBinder
 };
-use base::{ioctl_io_nr, ioctl_with_val, errno_result, SafeDescriptor, FromRawDescriptor};
+
+use vmm_sys_util::ioctl_ioc_nr;
+use vmm_sys_util::ioctl_io_nr;
+use vmm_sys_util::ioctl::ioctl_with_val;
+use vmm_sys_util::errno::errno_result;
 
 use serde::Deserialize;
 use std::thread;
@@ -18,7 +22,9 @@ use anyhow::{anyhow, Context, Result};
 use log::{info, debug, error, warn};
 use std::fs::{File, OpenOptions, remove_file};
 use std::os::fd::IntoRawFd;
-use std::os::unix::io::{RawFd};
+use std::os::fd::RawFd;
+use std::os::fd::OwnedFd;
+use std::os::unix::io::FromRawFd;
 
 use qcomvendor_libavf_bindgen::{AVirtualMachine_createRaw,
     AVirtualMachineRawConfig_setHypervisorSpecificAuthMethod, AVirtualMachineRawConfig_setInstanceId,
@@ -50,7 +56,7 @@ static DEFAULT_USERSPACE_TIMER: u32 = 5000; // Time in milliseconds to wait betw
 static DEFAULT_FORCE_SHUTDOWN: bool = false;
 static DEFAULT_EARLY_VM: bool = true;
 
-ioctl_io_nr!(GH_ANDROID_CREATE_CMA_MEM_FD, GH_ANDROID_IOCTL_TYPE, 0x14);
+ioctl_io_nr!(GH_ANDROID_CREATE_CMA_MEM_FD, GH_ANDROID_IOCTL_TYPE.into(), 0x14);
 
 fn default_force_shutdown() -> bool {
     DEFAULT_FORCE_SHUTDOWN
@@ -389,8 +395,8 @@ impl VmInstance {
 
         let dev_node_file = dev_node.unwrap();
         let dev_node_fd = dev_node_file.into_raw_fd();
-        let ref_dev_node = unsafe{&SafeDescriptor::from_raw_descriptor(dev_node_fd)};
-        let cma_fd = unsafe { ioctl_with_val(ref_dev_node, GH_ANDROID_CREATE_CMA_MEM_FD, 0 as c_ulong) };
+        let ref_dev_node = unsafe { OwnedFd::from_raw_fd(dev_node_fd) };
+        let cma_fd = unsafe { ioctl_with_val(&ref_dev_node, GH_ANDROID_CREATE_CMA_MEM_FD(), 0 as c_ulong) };
         let start_addr: u64 = 0x80000000;
         let mut size: u64 = fstat(cma_fd).unwrap().st_size as u64;
         info!("Max CMA Size = {:?}, ", size);
