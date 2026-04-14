@@ -50,7 +50,7 @@ use crate::to_binder_result;
 const GH_ANDROID_IOCTL_TYPE: u8 = 65u8;
 const CMA_TUI_VM: &str = "/dev/trustedvm_cma";
 const CMA_OEM_VM: &str = "/dev/oemvm_cma";
-const VM_USERSPACE_RETRY: u32 = 3;
+const VM_USERSPACE_RETRY: u32 = 5;
 static DEFAULT_VM_START_TIMER: u32 = 2500;   // Time in milliseconds to wait before trying to connect to Mink hub to accommodate VM bootup time
 static DEFAULT_USERSPACE_TIMER: u32 = 5000; // Time in milliseconds to wait between successive trials to connect to VM shutdown service
 static DEFAULT_FORCE_SHUTDOWN: bool = false;
