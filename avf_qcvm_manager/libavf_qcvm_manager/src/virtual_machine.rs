@@ -43,7 +43,7 @@ use vendor_qti_AvfQcvmManager::aidl::vendor::qti::AvfQcvmManager::{
 };
 
 use crate::dtbo::*;
-use guest_agent_client::{ServiceId, GuestAgentClient};
+use guest_agent_client::{ServiceId, GuestAgentClient, IGuestNotificationCallback};
 use crate::guest_client::*;
 use crate::to_binder_result;
 
@@ -199,6 +199,18 @@ pub struct AvfHandle {
 
 unsafe impl Send for AvfHandle {}
 
+/// Grouping all guest agent / userspace connection related members together
+#[derive(Default)]
+pub struct GuestManager{
+    /** This is an object to hold a reference for the shutdown Mink Service */
+    pub guest_client: Arc<Mutex<Option<GuestClient>>>,
+    /** Callback object to be passed to guest agent so as to get reboot handle
+        lifecycle notifications */
+    pub guest_callback: Arc<Mutex<Option<Arc<Mutex<GuestNotificationCallback>>>>>,
+    /** Thread to monitor reboot handle to know when to retry userspace connection */
+    pub guest_monitor_thread: Arc<Mutex<Option<thread::JoinHandle<Result<()>>>>>,
+}
+
 /// Since VirtualMachine Struct gets consumed via to_binder(), this struct is
 /// used to handle the VM with Default() and thread safe.
 #[derive(Default)]
@@ -217,10 +229,10 @@ pub struct VmInstance{
     pub state: Weak<Mutex<State>>,
     /** Need a thread to wait until the VM stops when clients request for a stop */
     pub wait_for_stop_thread: Arc<Mutex<Option<thread::JoinHandle<Result<()>>>>>,
-    /** This is an object to hold a reference for the shutdown Mink Service */
-    pub guest_client: Arc<Mutex<Option<GuestClient>>>,
     /** Wait till the Userspace is ready */
     pub wait_for_userspace_thread: Arc<Mutex<Option<thread::JoinHandle<Result<()>>>>>,
+    /** Handler for guest agent / userspace connection */
+    pub guest_manager: GuestManager,
 }
 
 impl VmInstance {
@@ -522,53 +534,167 @@ impl VmInstance {
         Ok(())
     }
 
-    pub fn wait_for_userspace(&mut self) -> Result<()>{
-        let vm_name = self.vm_config.name.clone();
-        let userspace_timer = self.vm_config.userspace_timer.clone();
-        let vm_userspace_retry_count = self.vm_config.vm_userspace_retry_count.clone();
-        let vm_start_timer = self.vm_config.vm_start_timer.clone();
-        let mink_uid = self.vm_config.mink_uid.clone();
-        let vsock_port = self.vm_config.vsock_port.clone();
-        if mink_uid == 0 && vsock_port == 0 {
-            warn!("mink_uid and vsock_port are both not set in config, will not set userspace_ready and keep state as started and don't support request stop");
-            return Ok(());
-        }
-        let strong_state = Weak::upgrade(&self.state);
-        let vm_clients_lock = Arc::clone(&self.vm_clients);
-        let guest_client_lock = Arc::clone(&self.guest_client);
-        let thread = thread::spawn(move|| -> Result<()>{
-            info!("Entered Wait for Userspace Thread for {:?}, mink_uid:{}, vsock_port:{}", vm_name, mink_uid, vsock_port);
-            //By default userspace ready is being determined by vsock
-            let mut service_id = ServiceId::VsockPort(vsock_port);
-            if mink_uid != 0 {
-                service_id = ServiceId::MinkUid(mink_uid);
-            }
-            // The Guest client shouldn't be used until the connect userspace is finished
-            let mut guest_client = guest_client_lock.lock().unwrap();
-            info!("Connecting to {:?} userspace", vm_name);
-            let guest_handle = match GuestClient::connect_userspace(vm_userspace_retry_count, vm_start_timer,
-                    userspace_timer, service_id) {
-                Ok(guest_client) => guest_client,
-                Err(e) => {
-                    *guest_client = None;
-                    return Err(anyhow!("Failed to connect to {:?} Guest Service {:?}",vm_name, e));
-                }
-            };
-            info!("Successfully connected to {:?} userspace!", vm_name);
-            *guest_client = Some(guest_handle);
-            if let Some(state_lock) = strong_state{
-                let mut state = state_lock.lock().unwrap();
-                *state = State::UserspaceReady;
-                let vm_clients = vm_clients_lock.lock().unwrap();
-                Self::notify_clients( &*vm_clients, *state)?;
-                return Ok(());
-            }
-            return Err(anyhow!("State object has died"));
-        });
-        let mut userspace_thread = self.wait_for_userspace_thread.lock().unwrap();
-        *userspace_thread = Some(thread);
-        Ok(())
+pub fn wait_for_userspace(&mut self) -> Result<()>{
+    let mink_uid = self.vm_config.mink_uid;
+    let vsock_port = self.vm_config.vsock_port;
+
+    if mink_uid == 0 && vsock_port == 0 {
+        warn!("mink_uid and vsock_port are both not set in config, will not set userspace_ready and keep state as started and don't support request stop");
+        return Ok(());
     }
+
+    self.spawn_userspace_thread()?;
+    self.monitor_userspace_handle()?;
+
+    Ok(())
+}
+
+fn spawn_userspace_thread(&mut self) -> Result<()> {
+    let vm_name = self.vm_config.name.clone();
+    let userspace_timer = self.vm_config.userspace_timer;
+    let vm_userspace_retry_count = self.vm_config.vm_userspace_retry_count;
+    let vm_start_timer = self.vm_config.vm_start_timer;
+    let mink_uid = self.vm_config.mink_uid;
+    let vsock_port = self.vm_config.vsock_port;
+
+    let strong_state = Weak::upgrade(&self.state).ok_or_else(|| anyhow!("State object has died"))?;
+    let vm_clients_lock = Arc::clone(&self.vm_clients);
+    let guest_client_lock = Arc::clone(&self.guest_manager.guest_client);
+    let guest_callback_lock = Arc::clone(&self.guest_manager.guest_callback);
+
+    let thread = thread::spawn(move|| -> Result<()>{
+        info!("Connecting to {:?} userspace (mink_uid:{}, vsock_port:{})", vm_name, mink_uid, vsock_port);
+
+        let service_id = if mink_uid != 0 {
+            ServiceId::MinkUid(mink_uid)
+        } else {
+            ServiceId::VsockPort(vsock_port)
+        };
+
+        let guest_callback = Arc::new(Mutex::new(GuestNotificationCallback{ reboot_handle_available: None }));
+
+        let guest_handle = GuestClient::connect_userspace(
+            vm_userspace_retry_count,
+            vm_start_timer,
+            userspace_timer,
+            service_id,
+            Some(guest_callback.clone())
+        ).map_err(|e| {
+            let mut guest_client = guest_client_lock.lock().unwrap();
+            *guest_client = None;
+            anyhow!("Failed to connect to {:?} Guest Service: {:?}", vm_name, e)
+        })?;
+
+        info!("Successfully connected to {:?} userspace!", vm_name);
+
+        // Store callback and client
+        *guest_callback_lock.lock().unwrap() = Some(guest_callback);
+        *guest_client_lock.lock().unwrap() = Some(guest_handle);
+
+        // Update state and notify clients
+        let mut state = strong_state.lock().unwrap();
+        *state = State::UserspaceReady;
+        let vm_clients = vm_clients_lock.lock().unwrap();
+        VmInstance::notify_clients(&*vm_clients, *state)?;
+
+        Ok(())
+    });
+
+    *self.wait_for_userspace_thread.lock().unwrap() = Some(thread);
+    Ok(())
+}
+
+pub fn monitor_userspace_handle(&mut self) -> Result<()> {
+    let vm_name = self.vm_config.name.clone();
+    let userspace_timer = self.vm_config.userspace_timer;
+    let vm_userspace_retry_count = self.vm_config.vm_userspace_retry_count;
+    let vm_start_timer = self.vm_config.vm_start_timer;
+    let mink_uid = self.vm_config.mink_uid;
+    let vsock_port = self.vm_config.vsock_port;
+
+    let state_lock = Weak::upgrade(&self.state).ok_or_else(|| anyhow!("State object has died"))?;
+    let vm_clients_lock = Arc::clone(&self.vm_clients);
+    let guest_callback_lock = Arc::clone(&self.guest_manager.guest_callback);
+    let guest_client_lock = Arc::clone(&self.guest_manager.guest_client);
+
+    let thread = thread::spawn(move|| -> Result<()> {
+        info!("Started monitoring reboot handle for {:?}", vm_name);
+
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            // Check if reboot handle is unavailable
+            let handle_lost = {
+                let callback_outer = guest_callback_lock.lock().unwrap();
+                callback_outer.as_ref()
+                    .and_then(|cb| cb.lock().ok())
+                    .and_then(|cb| cb.get_reboot_handle_availability())
+                    .map(|available| !available)
+                    .unwrap_or(false)
+            };
+
+            if !handle_lost {
+                continue;
+            }
+
+            info!("Reboot handle lost for {:?}, reconnecting to userspace", vm_name);
+
+            // Clear old client and update state
+            *guest_client_lock.lock().unwrap() = None;
+
+            // Update state to Started and notify clients
+            {
+                let mut state = state_lock.lock().unwrap();
+                *state = State::Started;
+                let vm_clients = vm_clients_lock.lock().unwrap();
+                if let Err(e) = VmInstance::notify_clients(&*vm_clients, *state) {
+                    error!("Failed to notify clients about Started state: {:?}", e);
+                }
+            }
+
+            // Reconnect to userspace
+            let service_id = if mink_uid != 0 {
+                ServiceId::MinkUid(mink_uid)
+            } else {
+                ServiceId::VsockPort(vsock_port)
+            };
+
+            let guest_callback = Arc::new(Mutex::new(GuestNotificationCallback{ reboot_handle_available: None }));
+
+            match GuestClient::connect_userspace(
+                vm_userspace_retry_count,
+                vm_start_timer,
+                userspace_timer,
+                service_id,
+                Some(guest_callback.clone())
+            ) {
+                Ok(guest_handle) => {
+                    info!("Successfully reconnected to {:?} userspace", vm_name);
+
+                    *guest_callback_lock.lock().unwrap() = Some(guest_callback);
+                    *guest_client_lock.lock().unwrap() = Some(guest_handle);
+
+                    // Update state to UserspaceReady and notify clients
+                    {
+                        let mut state = state_lock.lock().unwrap();
+                        *state = State::UserspaceReady;
+                        let vm_clients = vm_clients_lock.lock().unwrap();
+                        if let Err(e) = VmInstance::notify_clients(&*vm_clients, *state) {
+                            error!("Failed to notify clients about UserspaceReady state: {:?}", e);
+                        }
+                    }
+                },
+                Err(e) => {
+                    error!("Failed to reconnect to {:?} userspace: {:?}", vm_name, e);
+                    // Continue monitoring, will retry on next iteration if handle is still lost
+                }
+            }
+        }
+    });
+
+    *self.guest_manager.guest_monitor_thread.lock().unwrap() = Some(thread);
+    Ok(())
+}
 
     /// Creates a stop thread for the VM to get notified when the VM has stopped
     /// asynchronously. It will also notify all the clients about whether it stopped
@@ -638,6 +764,22 @@ impl VmInstance {
     }
 }
 
+#[derive(Default)]
+pub struct GuestNotificationCallback {
+    reboot_handle_available: Option<bool>,
+}
+
+impl IGuestNotificationCallback for GuestNotificationCallback {
+    fn set_reboot_handle_availability(&mut self, status: Option<bool>) -> Result<()> {
+        self.reboot_handle_available = status;
+        Ok(())
+    }
+
+    fn get_reboot_handle_availability(&self) -> Option<bool> {
+        self.reboot_handle_available
+    }
+}
+
 /// ===========================================================
 /// CORE IMPLEMENTATION
 /// ===========================================================
@@ -674,7 +816,7 @@ impl VirtualMachine{
         }
         let vm_name = vm_instance.vm_config.name.clone();
         let vm_clients_lock = Arc::clone(&vm_instance.vm_clients);
-        let guest_client_lock = Arc::clone(&vm_instance.guest_client);
+        let guest_client_lock = Arc::clone(&vm_instance.guest_manager.guest_client);
         let state_lock = Arc::clone(&self.main_state);
         let userspace_ready_thread_lock = Arc::clone(&vm_instance.wait_for_userspace_thread);
         let unsupported_request = vm_instance.vm_config.vsock_port == 0 && vm_instance.vm_config.mink_uid == 0;
@@ -967,7 +1109,7 @@ impl IVirtualMachine for VirtualMachine{
                 }
 
                 if vm_clients.len() == 0 {
-                    let guest_client_lock = Arc::clone(&vm_instance.guest_client);
+                    let guest_client_lock = Arc::clone(&vm_instance.guest_manager.guest_client);
                     //Safe to assume there is a Guest Service since the userspace
                     // thread joined successfully.
                     let guest_client = guest_client_lock.lock().unwrap();
@@ -1022,7 +1164,6 @@ impl IVirtualMachine for VirtualMachine{
     }
 }
 
-
 /// Create a VM Info from a VmConfig
 pub fn create_vm_info(vm_config: &VmConfig) -> Result<VmInfo>{
     let vm_info = VmInfo{
@@ -1039,5 +1180,4 @@ pub fn create_vm_info(vm_config: &VmConfig) -> Result<VmInfo>{
     };
     debug!("VM Info {:?}", vm_info);
     Ok(vm_info)
-
 }
