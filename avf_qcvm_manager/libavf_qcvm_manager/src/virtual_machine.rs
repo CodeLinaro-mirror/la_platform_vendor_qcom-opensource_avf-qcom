@@ -242,6 +242,9 @@ impl VmInstance {
     pub fn start_vm(&mut self) -> Result<()>{
 
         {
+            let _dtbo_index = self.get_vm_dtbo_index()
+                    .with_context(|| format!("{} - failed to retrieve VM DTBO index from system properties", &self.vm_config.name))?;
+
             let virtmgr_service_lock = Arc::clone(&self.avf_handle.lock().unwrap().virtmgr_service);
             let virtmgr = virtmgr_service_lock.lock().unwrap();
             match virtmgr.0 {
@@ -622,6 +625,17 @@ pub fn monitor_userspace_handle(&mut self) -> Result<()> {
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(100));
+
+            let current_state = {
+               let state = state_lock.lock().unwrap();
+               *state
+            };
+
+            match current_state {
+               State::Stopped | State::Crashed | State::ShuttingDown => break Ok(()),
+               State::Started => continue,
+               State::UserspaceReady => {}
+            }
 
             // Check if reboot handle is unavailable
             let handle_lost = {
