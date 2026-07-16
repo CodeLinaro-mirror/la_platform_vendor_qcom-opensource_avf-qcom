@@ -12,7 +12,7 @@ fn main() -> Result<()> {
     let start_userspace_timer=4;
 
     let thread = thread::spawn(move || {
-        match VsockClient::connect_userspace(0, start_userspace_timer, timeout, guest_agent_client::ServiceId::VsockPort(port)) {
+        match VsockClient::connect_userspace(0, start_userspace_timer, timeout, guest_agent_client::ServiceId::VsockPort(port), None) {
             Ok(service) => {
                 println!("Vsock connection established.");
                 //Note: we can update state to userspace ready here.
