@@ -242,6 +242,9 @@ impl VmInstance {
     pub fn start_vm(&mut self) -> Result<()>{
 
         {
+            let _dtbo_index = self.get_vm_dtbo_index()
+                    .with_context(|| format!("{} - failed to retrieve VM DTBO index from system properties", &self.vm_config.name))?;
+
             let virtmgr_service_lock = Arc::clone(&self.avf_handle.lock().unwrap().virtmgr_service);
             let virtmgr = virtmgr_service_lock.lock().unwrap();
             match virtmgr.0 {
