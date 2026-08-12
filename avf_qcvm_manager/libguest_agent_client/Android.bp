@@ -12,7 +12,7 @@ rust_library_rlib {
         "libserde_json",
         "libciborium",
         "libanyhow",
-        "libnix"
+        "libnix",
     ],
     vendor: true,
 }
@@ -23,6 +23,7 @@ rust_binary {
     rustlibs: [
         "libanyhow",
         "libguest_agent_client",
+        "libavf_qcvm_manager",
     ],
     prefer_rlib: true,
     vendor: true,
