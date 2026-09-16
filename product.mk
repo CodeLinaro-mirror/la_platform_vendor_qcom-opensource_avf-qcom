@@ -12,6 +12,10 @@ ifeq ($(TARGET_BOARD_PLATFORM),bengal)
 PRODUCT_QC_AVF_ENABLE := false
 endif
 
+ifeq ($(TARGET_BOARD_AUTO),true)
+PRODUCT_QC_AVF_ENABLE := false
+endif
+
 ifeq ($(PRODUCT_QC_AVF_ENABLE),true)
 PRODUCT_PACKAGES += early_vms_trusted_vm
 PRODUCT_PACKAGES += early_vms_oem_vm
