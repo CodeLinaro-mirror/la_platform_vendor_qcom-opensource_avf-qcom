@@ -8,7 +8,7 @@ else
 PRODUCT_QC_AVF_ENABLE := true
 endif
 
-ifeq ($(TARGET_BOARD_PLATFORM),bengal)
+ifneq ($(filter bengal taro,$(TARGET_BOARD_PLATFORM)),)
 PRODUCT_QC_AVF_ENABLE := false
 endif
 
